@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- `21cmfast_HERAxEuclid.ipynb`
+  - Updated foreground and horizon wedge prescription
+  - Fixed Nan appearance due to log binning in 2d power spectra plots 
+
 ### Added
 - `21cmfast_HERAxEuclid.ipynb` — new notebook demonstrating an end-to-end
   HERA × Euclid 21 cm–galaxy cross-correlation workflow using 21cmFASTv4
