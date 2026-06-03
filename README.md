@@ -213,15 +213,50 @@ L_los = lightcone.lightcone_dimensions[2]   # actual LOS comoving size [Mpc]
 
 ---
 
+## Source Modules
+
+### `src/conversions.py`
+
+Cosmological conversion utilities for high-redshift galaxy surveys. Import
+individual functions as needed:
+
+```python
+from src.conversions import (
+    Muv_to_Luv,
+    Luv_to_Muv,
+    survey_area_from_volume,
+    area_deg2_to_steradians,
+    volume_from_area,
+)
+```
+
+| Function | Description |
+|----------|-------------|
+| `Muv_to_Luv(Muv)` | Absolute UV AB magnitude → monochromatic luminosity [erg s⁻¹ Hz⁻¹] |
+| `Luv_to_Muv(Luv)` | Monochromatic luminosity [erg s⁻¹ Hz⁻¹] → AB magnitude |
+| `survey_area_from_volume(volume_mpc3, z_min, z_max, cosmo=None)` | Comoving volume [Mpc³] → survey area [deg²] |
+| `area_deg2_to_steradians(area_deg2)` | Survey area [deg²] → [sr] |
+| `volume_from_area(area_deg2, z_min, z_max, cosmo=None, n_z=1000)` | Survey area [deg²] → comoving volume [Mpc³] |
+
+All functions accept scalar or array inputs. Volume–area conversions use
+Simpson integration of the differential comoving volume
+$\mathrm{d}V/\mathrm{d}z\,\mathrm{d}\Omega$ (Hogg 1999) and default to the
+Planck18 cosmology; pass a custom `astropy.cosmology` object via `cosmo` to
+override.
+
+**Dependencies:** `numpy`, `astropy`, `scipy`
+
+---
+
 ## Requirements
 
 | Package | Used in |
 |---------|---------|
-| `numpy` | All notebooks |
+| `numpy` | All notebooks, `src/conversions.py` |
 | `matplotlib` | All notebooks |
-| `scipy` | `21cmfast_HERAxEuclid.ipynb`, `21cmfast_HERAxEuclid_lightcone.ipynb` |
+| `scipy` | `21cmfast_HERAxEuclid.ipynb`, `21cmfast_HERAxEuclid_lightcone.ipynb`, `src/conversions.py` |
 | `py21cmfast >= 4.1.1` | `21cmfast_HERAxEuclid.ipynb`, `21cmfast_HERAxEuclid_lightcone.ipynb` |
-| `astropy` | `21cmfast_HERAxEuclid.ipynb`, `21cmfast_HERAxEuclid_lightcone.ipynb` |
+| `astropy` | `21cmfast_HERAxEuclid.ipynb`, `21cmfast_HERAxEuclid_lightcone.ipynb`, `src/conversions.py` |
 
 The analytical notebook (`21cm_galaxy_cross_uncertainty.ipynb`) requires only `numpy` and `matplotlib`; all cosmological calculations use analytic fitting formulae (BBKS transfer function, Carroll et al. growth factor).
 
@@ -251,3 +286,6 @@ Run all cells sequentially. All notebooks are self-contained and generate all fi
 - **Kaiser (1987)**, MNRAS, 227, 1 — redshift-space distortions
 - **DeBoer et al. (2017)**, PASP — [arXiv:1606.07473](https://arxiv.org/abs/1606.07473) — HERA instrument specifications
 - **Planck Collaboration (2020)**, A&A, 641, A6 — [arXiv:1807.06209](https://arxiv.org/abs/1807.06209) — cosmological parameters
+- **Hogg (1999)** — [arXiv:astro-ph/9905116](https://arxiv.org/abs/astro-ph/9905116) — comoving distance and volume formulae
+- **Oke & Gunn (1983)**, ApJ, 266, 713 — AB magnitude system
+- **Madau & Dickinson (2014)**, ARA&A, 52, 415 — [arXiv:1403.0007](https://arxiv.org/abs/1403.0007) — UV luminosity and star formation rate density

@@ -7,6 +7,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **`src/conversions.py`** — new module of cosmological conversion utilities for
+  high-redshift galaxy surveys. Functions:
+  - `Muv_to_Luv(Muv)` — converts absolute UV AB magnitude to monochromatic UV
+    luminosity in erg s⁻¹ Hz⁻¹ (Oke & Gunn 1983; Madau & Dickinson 2014).
+  - `Luv_to_Muv(Luv)` — inverse conversion from luminosity to AB magnitude.
+  - `survey_area_from_volume(volume_mpc3, z_min, z_max, cosmo=None)` — infers
+    the sky area in deg² that corresponds to a given comoving survey volume
+    (Mpc³) over a redshift interval, using Simpson integration of the
+    differential comoving volume $\mathrm{d}V/\mathrm{d}z\,\mathrm{d}\Omega$
+    (Hogg 1999; Astropy).
+  - `area_deg2_to_steradians(area_deg2)` — unit conversion from deg² to sr.
+  - `volume_from_area(area_deg2, z_min, z_max, cosmo=None, n_z=1000)` —
+    computes the comoving survey volume (Mpc³) for a given sky area and
+    redshift range; inverse of `survey_area_from_volume`.
+
+  All functions accept scalar or array inputs and default to the Planck18
+  cosmology from astropy; a custom `astropy.cosmology` object may be passed
+  via the `cosmo` argument.
+
 ### Fixed
 - **`21cmfast_HERAxEuclid_lightcone.ipynb` — lightcone slice orientation:**
   Panels 2 and 3 of Section 5 previously had the LOS and transverse axes
