@@ -6,11 +6,35 @@ Forecasting the detectability of the 21 cm × galaxy cross-power spectrum during
 
 During reionization, neutral hydrogen (H I) emits 21 cm radiation that is **anti-correlated** with the galaxy density field: overdense regions host ionising galaxies and become 21 cm-dark, while underdense regions remain neutral and 21 cm-bright. The cross-power spectrum $P_{21\times\mathrm{gal}}(k_\perp, k_\parallel)$ quantifies this anti-correlation and is a key science target for HERA + Euclid/Roman Space Telescope.
 
-This project contains three complementary notebooks:
+This project contains three complementary notebooks plus a refactored HPC-optimised lightcone pipeline:
 
 1. **`21cm_galaxy_cross_uncertainty.ipynb`** — analytical framework using semi-analytic signal models and the La Plante et al. (2023) variance estimators.
 2. **`21cmfast_HERAxEuclid.ipynb`** — end-to-end simulation pipeline using 21cmFASTv4 with the discrete source model (Davies et al. 2025), based on a **coeval** (single-snapshot) simulation at $z = 6.5$.
 3. **`21cmfast_HERAxEuclid_lightcone.ipynb`** — same pipeline as (2) but using a **lightcone** simulation spanning a redshift range, producing a non-cubic $(N_\perp \times N_\perp \times N_z)$ volume with continuous redshift evolution along the LOS.
+
+### HPC lightcone pipeline (recommended for cluster use)
+
+The lightcone workflow has been split into three self-contained parts for efficient use on HPC clusters:
+
+| File | Purpose |
+|------|---------|
+| `run_simulation.py` | **Part 1** — runs the 21cmFAST lightcone, constructs the galaxy field, estimates galaxy bias, applies Kaiser RSD, and saves all outputs to `outputs/lightcone_data.h5` |
+| `notebooks/plot_fields.ipynb` | **Part 2** — loads the HDF5 output and visualises the simulated fields (halo catalogue, SFR distributions, lightcone slices, EoR brightness temperature plot) |
+| `notebooks/analysis.ipynb` | **Part 3** — loads the HDF5 output and performs all post-simulation calculations: 2D cylindrical power spectra, photo-$z$ damping, foreground wedge excision, and SNR estimation |
+| `submit_job.sh` | SLURM batch submission script for Part 1 |
+
+**Workflow:**
+
+```bash
+# On the HPC cluster — submit the simulation as a batch job
+sbatch submit_job.sh
+
+# Locally (or in a Jupyter session on the cluster) — visualise and analyse
+jupyter notebook notebooks/plot_fields.ipynb   # Part 2: field plots
+jupyter notebook notebooks/analysis.ipynb      # Part 3: power spectra & SNR
+```
+
+The HDF5 file `outputs/lightcone_data.h5` stores all simulation fields (compressed with gzip) and scalar metadata as attributes, so Parts 2 and 3 are completely independent of the simulation run.
 
 ## Notebooks
 
@@ -101,6 +125,12 @@ End-to-end HERA × Euclid cross-correlation workflow using 21cmFASTv4 with the d
 - 2D cylindrical power spectra $P_{21}$, $P_\mathrm{gal}$, $P_\mathrm{cross}$ (signed, with wedge overlays)
 - Per-mode SNR map in $(k_\perp, k_\parallel)$ space
 - Cumulative detection significance outside the foreground wedge
+
+---
+
+### 4. HPC pipeline — `run_simulation.py` + `notebooks/plot_fields.ipynb` + `notebooks/analysis.ipynb`
+
+A refactored version of notebook 3 split into three independent parts for cluster use. See the [HPC lightcone pipeline](#hpc-lightcone-pipeline-recommended-for-cluster-use) section above.
 
 ---
 
@@ -263,17 +293,25 @@ The analytical notebook (`21cm_galaxy_cross_uncertainty.ipynb`) requires only `n
 ## Usage
 
 ```bash
-# Analytical framework (no external dependencies)
+# Activate the 21cmfast conda environment first
+conda activate 21cmfast
+
+# Analytical framework (no external dependencies beyond numpy/matplotlib)
 jupyter notebook 21cm_galaxy_cross_uncertainty.ipynb
 
 # 21cmFAST coeval simulation pipeline (requires py21cmfast >= 4.1.1)
 jupyter notebook 21cmfast_HERAxEuclid.ipynb
 
-# 21cmFAST lightcone simulation pipeline (requires py21cmfast >= 4.1.1)
+# 21cmFAST lightcone simulation pipeline — monolithic version
 jupyter notebook 21cmfast_HERAxEuclid_lightcone.ipynb
+
+# HPC-optimised lightcone pipeline — recommended for cluster use
+sbatch submit_job.sh                                   # Part 1: run simulation
+jupyter notebook notebooks/plot_fields.ipynb           # Part 2: field plots
+jupyter notebook notebooks/analysis.ipynb              # Part 3: power spectra & SNR
 ```
 
-Run all cells sequentially. All notebooks are self-contained and generate all figures inline. The simulation notebooks cache 21cmFAST outputs to disk on first run.
+Run all cells sequentially. All notebooks are self-contained and generate all figures inline. The simulation notebooks cache 21cmFAST outputs to disk on first run. The HPC pipeline saves simulation outputs to `outputs/lightcone_data.h5` for independent loading by the analysis notebooks.
 
 ## References
 

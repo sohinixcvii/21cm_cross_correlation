@@ -8,6 +8,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **HPC lightcone pipeline** — the monolithic `21cmfast_HERAxEuclid_lightcone.ipynb`
+  has been refactored into three self-contained parts for efficient cluster use:
+
+  - **`run_simulation.py`** (Part 1 — batch script): runs the 21cmFASTv4 lightcone
+    simulation, constructs the galaxy density field from `halo_sfr`, estimates the
+    galaxy bias via HMF integration over the Euclid UV magnitude range, applies
+    Kaiser redshift-space distortions in Fourier space, and saves all outputs to
+    `outputs/lightcone_data.h5` with gzip compression. Uses `matplotlib.use("Agg")`
+    for headless HPC execution. No logic changes from the notebook — same algorithms,
+    same parameters, same comments.
+
+  - **`notebooks/plot_fields.ipynb`** (Part 2 — visualisation notebook): loads
+    `outputs/lightcone_data.h5` and reproduces all field plots from the original
+    notebook: halo catalogue scatter plots and SFR distributions (Cells 10–11),
+    the three-panel lightcone slice (Cell 18), and the wide-format EoR brightness
+    temperature plot (Cell 20). Gracefully skips halo catalogue cells when no
+    catalogue is available (synthetic fallback).
+
+  - **`notebooks/analysis.ipynb`** (Part 3 — calculation notebook): loads
+    `outputs/lightcone_data.h5` and performs all post-simulation calculations:
+    `compute_cylindrical_cross_power` (Cell 22), foreground wedge geometry and
+    power spectrum plots (Cells 23–24), photo-$z$ damping and wedge excision
+    (Cell 26), per-mode SNR map and total detection significance (Cell 28), and
+    the summary table (Cell 29).
+
+  - **`submit_job.sh`**: SLURM batch submission script that activates the
+    `21cmfast` conda environment and runs `run_simulation.py`. Configurable
+    wall-time, memory, and partition via `#SBATCH` directives.
+
+  All scalar parameters and metadata are stored as HDF5 attributes in
+  `outputs/lightcone_data.h5` so that Parts 2 and 3 require no configuration
+  beyond pointing at the output file. The kernelspec for both notebooks is
+  set to `21cmfast`.
+
+
+
+### Added
 - **`src/conversions.py`** — new module of cosmological conversion utilities for
   high-redshift galaxy surveys. Functions:
   - `Muv_to_Luv(Muv)` — converts absolute UV AB magnitude to monochromatic UV
