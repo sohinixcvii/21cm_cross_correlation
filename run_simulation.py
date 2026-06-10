@@ -77,8 +77,8 @@ DIM     = 3 * HII_DIM  # high-res grid for initial conditions
 # ---------------------------------------------------------------------------
 #  Lightcone redshift range
 # ---------------------------------------------------------------------------
-z_min = 6.5          # nearest redshift (low-z end of lightcone)
-z_max = 7.5          # farthest redshift (high-z end)
+z_min = 6.995          # nearest redshift (low-z end of lightcone)
+z_max = 7.005          # farthest redshift (high-z end)
 
 # ---------------------------------------------------------------------------
 #  Euclid-like survey parameters
