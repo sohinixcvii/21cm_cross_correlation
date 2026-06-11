@@ -20,7 +20,7 @@ The lightcone workflow has been split into three self-contained parts for effici
 |------|---------|
 | `run_simulation.py` | **Part 1** — runs the 21cmFAST lightcone, constructs the galaxy field, estimates galaxy bias, applies Kaiser RSD, and saves all outputs to `outputs/lightcone_data.h5` |
 | `notebooks/plot_fields.ipynb` | **Part 2** — loads the HDF5 output and visualises the simulated fields (halo catalogue, SFR distributions, lightcone slices, EoR brightness temperature plot) |
-| `notebooks/analysis.ipynb` | **Part 3** — loads the HDF5 output and performs all post-simulation calculations: 2D cylindrical power spectra, photo-$z$ damping, foreground wedge excision, and SNR estimation |
+| `notebooks/analysis.ipynb` | **Part 3** — loads the HDF5 output and performs all post-simulation calculations: 2D cylindrical power spectra, photo-$z$ damping, foreground wedge excision, SNR estimation, Euclid magnitude/SFR cuts, and effective galaxy bias from the halo catalogue |
 | `submit_job.sh` | SLURM batch submission script for Part 1 |
 
 **Workflow:**
@@ -252,18 +252,45 @@ individual functions as needed:
 
 ```python
 from src.conversions import (
-    Muv_to_Luv,
-    Luv_to_Muv,
+    Muv_to_Luv, Luv_to_Muv,
+    Luv_to_sfr, sfr_to_Luv, sfr_to_Muv,
+    sheth_tormen_bias,
     survey_area_from_volume,
     area_deg2_to_steradians,
     volume_from_area,
 )
 ```
 
+**Magnitude–luminosity conversions**
+
 | Function | Description |
 |----------|-------------|
 | `Muv_to_Luv(Muv)` | Absolute UV AB magnitude → monochromatic luminosity [erg s⁻¹ Hz⁻¹] |
-| `Luv_to_Muv(Luv)` | Monochromatic luminosity [erg s⁻¹ Hz⁻¹] → AB magnitude |
+| `Luv_to_Muv(Luv)` | Monochromatic luminosity [erg s⁻¹ Hz⁻¹] → absolute UV AB magnitude |
+
+**UV luminosity – SFR conversions** (Madau & Dickinson 2014, Chabrier IMF, $\kappa_\mathrm{UV} = 1.15\times10^{-28}\ M_\odot\ \mathrm{yr}^{-1}\ /\ (\mathrm{erg\ s}^{-1}\ \mathrm{Hz}^{-1})$)
+
+| Function | Description |
+|----------|-------------|
+| `Luv_to_sfr(Luv, kappa_uv=1.15e-28)` | UV luminosity [erg s⁻¹ Hz⁻¹] → SFR [M☉ yr⁻¹] |
+| `sfr_to_Luv(sfr, kappa_uv=1.15e-28)` | SFR [M☉ yr⁻¹] → UV luminosity [erg s⁻¹ Hz⁻¹] |
+| `sfr_to_Muv(sfr, kappa_uv=1.15e-28)` | SFR [M☉ yr⁻¹] → absolute UV AB magnitude (chains `sfr_to_Luv` → `Luv_to_Muv`) |
+
+**Halo bias**
+
+| Function | Description |
+|----------|-------------|
+| `sheth_tormen_bias(nu_sq, delta_c=1.686, a=0.707, p=0.3)` | Sheth-Tormen (1999) Eulerian halo bias. `nu_sq` is $(δ_c/σ)^2$ as returned by `hmf.MassFunction.nu` — **not** $δ_c/σ$ |
+
+> **`hmf` convention note:** `MassFunction.nu` in `hmf` ≥ 3.x stores the
+> *squared* peak height $(δ_c/σ)^2$, consistent with the original Sheth &
+> Tormen (1999) notation. Pass `mf.nu` directly to `sheth_tormen_bias` — do
+> not square it again.
+
+**Survey geometry conversions**
+
+| Function | Description |
+|----------|-------------|
 | `survey_area_from_volume(volume_mpc3, z_min, z_max, cosmo=None)` | Comoving volume [Mpc³] → survey area [deg²] |
 | `area_deg2_to_steradians(area_deg2)` | Survey area [deg²] → [sr] |
 | `volume_from_area(area_deg2, z_min, z_max, cosmo=None, n_z=1000)` | Survey area [deg²] → comoving volume [Mpc³] |
@@ -284,9 +311,11 @@ override.
 |---------|---------|
 | `numpy` | All notebooks, `src/conversions.py` |
 | `matplotlib` | All notebooks |
-| `scipy` | `21cmfast_HERAxEuclid.ipynb`, `21cmfast_HERAxEuclid_lightcone.ipynb`, `src/conversions.py` |
-| `py21cmfast >= 4.1.1` | `21cmfast_HERAxEuclid.ipynb`, `21cmfast_HERAxEuclid_lightcone.ipynb` |
+| `scipy` | `21cmfast_HERAxEuclid.ipynb`, `21cmfast_HERAxEuclid_lightcone.ipynb`, `notebooks/analysis.ipynb`, `src/conversions.py` |
+| `py21cmfast >= 4.1.1` | `21cmfast_HERAxEuclid.ipynb`, `21cmfast_HERAxEuclid_lightcone.ipynb`, `run_simulation.py` |
 | `astropy` | `21cmfast_HERAxEuclid.ipynb`, `21cmfast_HERAxEuclid_lightcone.ipynb`, `src/conversions.py` |
+| `hmf` | `run_simulation.py`, `notebooks/analysis.ipynb` |
+| `h5py` | `run_simulation.py`, `notebooks/plot_fields.ipynb`, `notebooks/analysis.ipynb` |
 
 The analytical notebook (`21cm_galaxy_cross_uncertainty.ipynb`) requires only `numpy` and `matplotlib`; all cosmological calculations use analytic fitting formulae (BBKS transfer function, Carroll et al. growth factor).
 
@@ -326,4 +355,6 @@ Run all cells sequentially. All notebooks are self-contained and generate all fi
 - **Planck Collaboration (2020)**, A&A, 641, A6 — [arXiv:1807.06209](https://arxiv.org/abs/1807.06209) — cosmological parameters
 - **Hogg (1999)** — [arXiv:astro-ph/9905116](https://arxiv.org/abs/astro-ph/9905116) — comoving distance and volume formulae
 - **Oke & Gunn (1983)**, ApJ, 266, 713 — AB magnitude system
-- **Madau & Dickinson (2014)**, ARA&A, 52, 415 — [arXiv:1403.0007](https://arxiv.org/abs/1403.0007) — UV luminosity and star formation rate density
+- **Madau & Dickinson (2014)**, ARA&A, 52, 415 — [arXiv:1403.0007](https://arxiv.org/abs/1403.0007) — UV luminosity–SFR calibration ($\kappa_\mathrm{UV}$, Chabrier IMF)
+- **Sheth & Tormen (1999)**, MNRAS, 308, 119 — [arXiv:astro-ph/9901122](https://arxiv.org/abs/astro-ph/9901122) — halo mass function and bias formula
+- **Murray, Robotham & Power (2013)**, Astron. Comput., 3, 23 — `hmf` halo mass function code

@@ -8,6 +8,92 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`src/conversions.py` — UV luminosity–SFR conversions:**
+  - `_KAPPA_UV_MADAU14 = 1.15e-28` — module-level constant for the Madau &
+    Dickinson (2014) UV–SFR calibration factor [M☉ yr⁻¹ / (erg s⁻¹ Hz⁻¹)],
+    Chabrier (2003) IMF, rest-frame ~1500 Å.
+  - `Luv_to_sfr(Luv, kappa_uv=1.15e-28)` — UV luminosity [erg s⁻¹ Hz⁻¹] →
+    SFR [M☉ yr⁻¹] via `SFR = κ_UV × L_UV`.
+  - `sfr_to_Luv(sfr, kappa_uv=1.15e-28)` — inverse: SFR [M☉ yr⁻¹] → UV
+    luminosity [erg s⁻¹ Hz⁻¹].
+  - `sfr_to_Muv(sfr, kappa_uv=1.15e-28)` — convenience chain: SFR →
+    `sfr_to_Luv` → `Luv_to_Muv`, giving the AB magnitude directly.
+
+- **`src/conversions.py` — Sheth-Tormen halo bias:**
+  - `sheth_tormen_bias(nu_sq, delta_c=1.686, a=0.707, p=0.3)` — Eulerian
+    linear halo bias $b(\tilde\nu) = 1 + (a\tilde\nu-1)/\delta_c +
+    2p/(\delta_c(1+(a\tilde\nu)^p))$ where $\tilde\nu = (\delta_c/\sigma)^2$
+    is the squared peak height as returned by `hmf.MassFunction.nu`.
+    Documented with an explicit warning that `hmf` ≥ 3.x stores `mf.nu` as
+    the *squared* peak height (Sheth & Tormen 1999 convention), not
+    $\delta_c/\sigma$.
+
+- **`notebooks/analysis.ipynb` — halo catalogue loading (Section 0, HDF5
+  cell):** Extended the HDF5 load block to read the halo catalogue stored by
+  `run_simulation.py`: `sfr_cat`, `halo_masses`, `halo_coords`,
+  `stellar_masses` (all under `halo_catalog/`). A count of halos with
+  `SFR > 0` is printed on load. Arrays are empty when the simulation was run
+  without 21cmFAST.
+
+- **`notebooks/analysis.ipynb` — Section 4: Euclid luminosity and SFR cuts
+  (three cells):**
+  - **Cell 12** — Converts the HDF5 `M_UV_limit` attribute to a UV luminosity
+    floor via `Muv_to_Luv` from `src/conversions.py`. Sets up `sys.path` so
+    all subsequent cells can import from `src/`.
+  - **Cell 13 (Version 1 — SFR bounds)** — Derives the SFR selection window
+    `[SFR_min, SFR_max]` from the Euclid magnitude window
+    `[M_UV_bright=-22, M_UV_limit]` using `Luv_to_sfr`. Applies the SFR
+    window as a direct cut on the `sfr_cat` halo catalogue and prints the
+    selected count and SFR range.
+  - **Cell 14 (Version 2 — per-halo magnitude assignment)** — For each halo
+    with `SFR > 0`, computes `L_UV = sfr_to_Luv(SFR)` then
+    `M_UV = Luv_to_Muv(L_UV)`, and applies the Euclid magnitude window as an
+    explicit $M_\mathrm{UV}$ cut. Prints selected counts and the full
+    M_UV / L_UV / SFR ranges. Mathematically equivalent to Version 1;
+    confirms internal consistency of the conversion chain.
+
+- **`notebooks/analysis.ipynb` — Section 4.3: effective galaxy bias from the
+  halo catalogue (cells 15–16):** Implements the `temp.py` logic with two
+  physics bugs corrected (see **Fixed** below):
+  - Sanitises `sfr_cat` (NaN/negative → 0), selects halos with `SFR > 0` and
+    `halo_mass > 0`, converts SFR → M_UV via `sfr_to_Luv` + `Luv_to_Muv`,
+    and applies the Euclid magnitude window.
+  - Converts selected 21cmFAST halo masses from M☉ to M☉ h⁻¹ using
+    `h = HUBBLE_CONSTANT / 100` before querying the HMF grid.
+  - Builds a `MassFunction` grid spanning the selected mass range (+0.5 dex
+    margin), computes `sheth_tormen_bias(mf.nu)`, and interpolates to each
+    selected halo mass to obtain `selected_biases`.
+  - Reports the number-weighted mean effective galaxy bias
+    $\langle b_g \rangle$ and the bias range.
+  - Produces a diagnostic plot: histogram of selected halo masses (left axis)
+    with the Sheth-Tormen bias curve overlaid (right axis, red dashed), and a
+    dotted line marking $\langle b_g \rangle$.
+  - The entire block is guarded by `if len(sfr_cat) > 0` so the notebook
+    runs end-to-end when 21cmFAST is unavailable.
+
+### Fixed
+- **`notebooks/analysis.ipynb` — Section 4.3: ν² double-squaring bug
+  (from `temp.py`):** `hmf.MassFunction.nu` in `hmf` ≥ 3.x stores the
+  *squared* peak height $\tilde\nu = (\delta_c/\sigma)^2$ (Sheth & Tormen
+  1999 convention). `temp.py` treated `mf.nu` as $\delta_c/\sigma$ and
+  squared it again in the bias formula, computing $a\tilde\nu^2$ instead of
+  the correct $a\tilde\nu$. This caused a **4–17× overestimate** of the
+  galaxy bias (e.g. $\langle b_g\rangle \approx 60$ instead of $\approx 5$
+  for a typical Euclid sample at $z \sim 7$). Fixed by using
+  `sheth_tormen_bias(mf.nu)` from `src/conversions.py`, which correctly
+  treats its argument as $\tilde\nu$.
+
+- **`notebooks/analysis.ipynb` — Section 4.3: halo mass unit mismatch
+  (from `temp.py`):** `hmf.MassFunction.m` returns masses in M☉ h⁻¹, while
+  21cmFAST `perturbed_halos.halo_masses` (and the `halo_masses` array loaded
+  from the HDF5) are in M☉. `temp.py` passed M☉ masses directly to the
+  log-spaced HMF grid defined in M☉ h⁻¹ units, producing a systematic
+  $\log_{10}(h) \approx -0.17$ dex offset in the bias interpolation. Fixed
+  by converting selected halo masses to M☉ h⁻¹ via
+  `selected_mass * (HUBBLE_CONSTANT / 100)` before computing `log10_m_min`,
+  `log10_m_max`, and the interpolation argument.
+
+### Added
 - **HPC lightcone pipeline** — the monolithic `21cmfast_HERAxEuclid_lightcone.ipynb`
   has been refactored into three self-contained parts for efficient cluster use:
 
