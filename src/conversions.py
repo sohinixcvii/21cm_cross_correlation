@@ -182,6 +182,57 @@ def sfr_to_Luv(sfr, kappa_uv=_KAPPA_UV_MADAU14):
     return sfr / kappa_uv
 
 
+def sheth_tormen_bias(nu_sq, delta_c=1.686, a=0.707, p=0.3):
+    """
+    Sheth-Tormen halo bias as a function of squared peak height.
+
+    Parameters
+    ----------
+    nu_sq : float or ndarray
+        Squared peak height  (δ_c / σ)²  as returned by the ``hmf`` package
+        (``MassFunction.nu``).  This is **not** δ_c/σ itself.
+
+    delta_c : float, optional
+        Linear collapse threshold. Default 1.686.
+
+    a : float, optional
+        Sheth-Tormen parameter. Default 0.707.
+
+    p : float, optional
+        Sheth-Tormen parameter. Default 0.3.
+
+    Returns
+    -------
+    bias : float or ndarray
+        Eulerian linear halo bias  b_h(ν, z).
+
+    Notes
+    -----
+    Implements the Sheth-Tormen (1999) bias formula
+
+        b(ν̃) = 1 + (a ν̃ - 1) / δ_c + 2p / (δ_c (1 + (a ν̃)^p))
+
+    where  ν̃ = (δ_c / σ)²  is the squared peak height.
+
+    The ``hmf`` package (v3+) stores ``MassFunction.nu`` as this squared
+    quantity, consistent with the original Sheth & Tormen (1999) notation.
+    Passing ``MassFunction.nu`` directly to this function is therefore
+    correct.
+
+    References
+    ----------
+    Sheth & Tormen (1999), MNRAS 308, 119
+    Tinker et al. (2010), ApJ 724, 878
+
+    Examples
+    --------
+    >>> sheth_tormen_bias(5.0)   # nu_sq = 5 -> bias ~ 2.6
+    2.63
+    """
+    a_nu = a * nu_sq
+    return 1.0 + (a_nu - 1.0) / delta_c + (2.0 * p) / (delta_c * (1.0 + a_nu**p))
+
+
 def sfr_to_Muv(sfr, kappa_uv=_KAPPA_UV_MADAU14):
     """
     Convert a star-formation rate directly to an absolute UV AB magnitude.
