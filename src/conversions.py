@@ -87,6 +87,144 @@ def Luv_to_Muv(Luv):
     """
     return 51.60 - 2.5 * np.log10(Luv)
 
+# Madau & Dickinson (2014) UV–SFR conversion factor
+# SFR [M_sun yr^-1] = kappa_UV * L_UV [erg s^-1 Hz^-1]
+# Chabrier (2003) IMF, rest-frame ~1500 Å
+_KAPPA_UV_MADAU14 = 1.15e-28
+
+
+def Luv_to_sfr(Luv, kappa_uv=_KAPPA_UV_MADAU14):
+    """
+    Convert a monochromatic UV luminosity to a star-formation rate.
+
+    Parameters
+    ----------
+    Luv : float or ndarray
+        Monochromatic UV luminosity in units of
+
+            erg s^-1 Hz^-1
+
+    kappa_uv : float, optional
+        UV–SFR conversion factor in units of
+
+            M_sun yr^-1 / (erg s^-1 Hz^-1)
+
+        Default is 1.15e-28 from Madau & Dickinson (2014) for a
+        Chabrier (2003) IMF.
+
+    Returns
+    -------
+    sfr : float or ndarray
+        Star-formation rate in units of
+
+            M_sun yr^-1
+
+    Notes
+    -----
+    Uses the linear relation
+
+        SFR = kappa_UV * L_UV
+
+    References
+    ----------
+    Madau & Dickinson (2014), ARAA 52, 415
+    Kennicutt & Evans (2012), ARAA 50, 531
+
+    Examples
+    --------
+    >>> Luv_to_sfr(2.754e27)
+    0.317
+    """
+    return kappa_uv * Luv
+
+
+def sfr_to_Luv(sfr, kappa_uv=_KAPPA_UV_MADAU14):
+    """
+    Convert a star-formation rate to a monochromatic UV luminosity.
+
+    Parameters
+    ----------
+    sfr : float or ndarray
+        Star-formation rate in units of
+
+            M_sun yr^-1
+
+    kappa_uv : float, optional
+        UV–SFR conversion factor in units of
+
+            M_sun yr^-1 / (erg s^-1 Hz^-1)
+
+        Default is 1.15e-28 from Madau & Dickinson (2014) for a
+        Chabrier (2003) IMF.
+
+    Returns
+    -------
+    Luv : float or ndarray
+        Monochromatic UV luminosity in units of
+
+            erg s^-1 Hz^-1
+
+    Notes
+    -----
+    Inverts the relation
+
+        SFR = kappa_UV * L_UV
+
+    References
+    ----------
+    Madau & Dickinson (2014), ARAA 52, 415
+
+    Examples
+    --------
+    >>> sfr_to_Luv(1.0)
+    8.696e27
+    """
+    return sfr / kappa_uv
+
+
+def sfr_to_Muv(sfr, kappa_uv=_KAPPA_UV_MADAU14):
+    """
+    Convert a star-formation rate directly to an absolute UV AB magnitude.
+
+    Parameters
+    ----------
+    sfr : float or ndarray
+        Star-formation rate in units of
+
+            M_sun yr^-1
+
+    kappa_uv : float, optional
+        UV–SFR conversion factor in units of
+
+            M_sun yr^-1 / (erg s^-1 Hz^-1)
+
+        Default is 1.15e-28 from Madau & Dickinson (2014).
+
+    Returns
+    -------
+    Muv : float or ndarray
+        Absolute UV magnitude in the AB magnitude system.
+
+    Notes
+    -----
+    Chains the two-step conversion
+
+        SFR → L_UV = SFR / kappa_UV
+        L_UV → M_UV = 51.60 - 2.5 log10(L_UV)
+
+    References
+    ----------
+    Madau & Dickinson (2014), ARAA 52, 415
+    Oke & Gunn (1983)
+
+    Examples
+    --------
+    >>> sfr_to_Muv(1.0)
+    -18.25
+    """
+    return Luv_to_Muv(sfr_to_Luv(sfr, kappa_uv=kappa_uv))
+
+
 def survey_area_from_volume(
     volume_mpc3,
     z_min,
