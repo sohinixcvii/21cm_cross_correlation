@@ -22,6 +22,8 @@ from scipy.integrate import simpson
 
 
 def survey_volume_from_area(area_deg2, z_min, z_max, cosmology=Planck18, n_z=1000):
+    if n_z < 2:
+        raise ValueError(f"n_z must be at least 2 for Simpson integration, got {n_z}.")
     area_sr = (area_deg2 * u.deg**2).to(u.sr)
 
     z_grid = np.linspace(z_min, z_max, n_z)
@@ -107,6 +109,8 @@ def main():
 
     if args.z_max <= args.z_min:
         raise ValueError("z_max must be greater than z_min.")
+    if args.n_z < 2:
+        raise ValueError("--n-z must be at least 2.")
 
     z_mid = 0.5 * (args.z_min + args.z_max)
 
