@@ -29,7 +29,7 @@ echo "----------------------------------------" | tee -a "$LOG_FILE"
 
 # ── Activate conda environment ────────────────────────────────────────────────
 # Uncomment this if conda activate fails:
-# source "$(conda info --base)/etc/profile.d/conda.sh"
+source "$(conda info --base)/etc/profile.d/conda.sh"
 
 conda activate "$CONDA_ENV"
 
