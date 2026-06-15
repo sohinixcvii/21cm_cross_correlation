@@ -324,10 +324,18 @@ if HAS_21CMFAST:
     )
 
     # 4. Pull useful arrays (convert 21cmFAST Array objects to NumPy)
+    #
+    # UNIT NOTE — py21cmfast v4 computes SFR internally in M_sun s^-1
+    # (scaling_relations.c: sfr_mean = stellar_mass / (t_star * t_h),
+    # where t_h = t_hubble(z) is in seconds).  The `.value` attribute
+    # returns this raw internal value.  We convert to M_sun yr^-1 here
+    # so that the HDF5 catalogue matches its documented unit and is
+    # directly comparable to observational SFR calibrations.
+    _SEC_PER_YR = 365.25 * 24 * 3600          # 3.15576e7 s yr^-1
     halo_masses    = np.asarray(perturbed_halos.halo_masses.value)
     halo_coords    = np.asarray(perturbed_halos.halo_coords.value)
     stellar_masses = np.asarray(perturbed_halos.stellar_masses.value)
-    sfr_cat        = np.asarray(perturbed_halos.sfr.value)
+    sfr_cat        = np.asarray(perturbed_halos.sfr.value) * _SEC_PER_YR
 
     print(f"  Number of halos: {perturbed_halos.n_halos}")
 
