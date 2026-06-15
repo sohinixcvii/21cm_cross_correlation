@@ -128,12 +128,6 @@ End-to-end HERA × Euclid cross-correlation workflow using 21cmFASTv4 with the d
 
 ---
 
-### 4. HPC pipeline — `run_simulation.py` + `notebooks/plot_fields.ipynb` + `notebooks/analysis.ipynb`
-
-A refactored version of notebook 3 split into three independent parts for cluster use. See the [HPC lightcone pipeline](#hpc-lightcone-pipeline-recommended-for-cluster-use) section above.
-
----
-
 ### 3. `21cmfast_HERAxEuclid_lightcone.ipynb`
 
 Lightcone counterpart to notebook 2. Uses `RectilinearLightconer` + `run_lightcone` to produce a self-consistent lightcone over a redshift range (default $z = 6.5$–$7.5$), then applies the same galaxy field construction, Kaiser RSD, 2D power spectrum calculation, and SNR estimation as the coeval notebook.
@@ -192,9 +186,15 @@ Lightcone counterpart to notebook 2. Uses `RectilinearLightconer` + `run_lightco
 | $M_\mathrm{UV}$ limit | $< -18$ | Euclid galaxy selection |
 | $\sigma_z$ | 0.059 | Euclid photo-$z$ uncertainty |
 | $\bar{n}_\mathrm{gal}$ | $3\times10^{-3}\ h^3\ \mathrm{Mpc}^{-3}$ | Mean galaxy number density |
-| $b_\mathrm{gal}$ | 8 | Galaxy bias (estimated via HMF integration) |
+| $b_\mathrm{gal}$ | 8 | Galaxy bias fallback; Sheth-Tormen HMF integral over the Euclid magnitude range used if `hmf` is installed |
 | $t_\mathrm{obs}$ | 1000 h | Integration time |
 | Bandwidth | 8 MHz | HERA per-band bandwidth |
+
+---
+
+### 4. HPC pipeline — `run_simulation.py` + `notebooks/plot_fields.ipynb` + `notebooks/analysis.ipynb`
+
+A refactored version of notebook 3 split into three independent parts for cluster use. See the [HPC lightcone pipeline](#hpc-lightcone-pipeline-recommended-for-cluster-use) section above.
 
 ---
 
@@ -204,10 +204,12 @@ In 21cmFAST v4.1+, `coeval.halobox` is a `HaloBox` object whose arrays are acces
 
 | Field | Description |
 |-------|-------------|
-| `halo_sfr` | Total SFR per cell, summed over all halos [internal units] |
+| `halo_sfr` | Total SFR per cell, summed over all halos [internal units — absolute value cancels in $\delta_\mathrm{gal}$] |
 | `n_ion` | Number of ionising photons per cell |
 
-Individual halo positions and UV magnitudes are not exposed by this API. A strict per-halo $M_\mathrm{UV}$ cut requires post-processing the raw halo catalogue from a lightcone run.
+Individual halo positions, stellar masses, and SFRs are not exposed via the lightcone `lightcones` dict. The per-halo catalogue can be retrieved after the simulation using `determine_halo_catalog` + `perturb_halo_catalog` (see `run_simulation.py`, Section 3a).
+
+> **SFR unit warning (py21cmfast v4):** `perturbed_halos.sfr.value` returns the SFR in **M☉ s⁻¹** (the internal C unit from `scaling_relations.c`), not M☉ yr⁻¹ as stated in the documentation. Multiply by `365.25 × 24 × 3600 = 3.15576 × 10⁷` to convert to M☉ yr⁻¹. `halo_masses` and `stellar_masses` are unaffected. See `docs/Low_SFR_fix.md` for full diagnosis and verification.
 
 The galaxy overdensity is constructed as $\delta_\mathrm{gal} = \mathrm{SFR}/\langle\mathrm{SFR}\rangle - 1$, which correctly traces the galaxy distribution and produces the expected large-scale anti-correlation with the 21 cm field (negative cross-spectrum on large scales).
 
@@ -239,6 +241,40 @@ neutral_frac    = lightcone.lightcones["neutral_fraction"]   # note: not "xH_box
 halo_sfr        = lightcone.lightcones["halo_sfr"]
 
 L_los = lightcone.lightcone_dimensions[2]   # actual LOS comoving size [Mpc]
+```
+
+### 21cmFAST source model templates
+
+`InputParameters.from_template()` accepts a template name or list of names (later entries override earlier ones). The template sets all physics toggle flags; size templates can be stacked on top of a physics template.
+
+**Available physics templates:**
+
+| Template | Key physics enabled | Typical use |
+|---|---|---|
+| `simple` | Grid-based halos only | Fast tests, reionisation morphology without Ts |
+| `latest` | Grid-based halos + Ts fluctuations + inhomogeneous recombinations | Production runs |
+| `latest-discrete` | Same as `latest` + discrete (sampled) halo field | Highest fidelity |
+| `minihalos` | `latest` + molecularly cooled / PopIII minihalos | X-ray / Lyman-Werner background studies |
+| `Park19` | Exact Park et al. (2019) fiducial | Comparison runs |
+| `Qin20` | Exact Qin et al. (2020) fiducial | Comparison runs |
+
+`simple` specifically disables: `USE_TS_FLUCT`, `INHOMO_RECO`, `CELL_RECOMB`, `USE_MINI_HALOS`; sets `HII_FILTER = 'sharp-k'` and `SOURCE_MODEL = 'E-INTEGRAL'`.
+
+**Available size templates** (stack on top of a physics template): `size-tiny` (32 cells, 48 Mpc), `size-small` (64 cells, 92 Mpc), `size-medium` (256 cells, 384 Mpc), `size-gpc` (~1 Gpc).
+
+```python
+# Current project configuration — fast but no Ts fluctuations:
+inputs = p21c.InputParameters.from_template(["simple"], random_seed=42)
+
+# Full physics (Ts fluctuations + recombinations), same grid:
+inputs = p21c.InputParameters.from_template(["latest"], random_seed=42)
+
+# Full physics + override grid size:
+inputs = p21c.InputParameters.from_template(["latest", "size-medium"], random_seed=42)
+
+# List all available templates:
+from py21cmfast._templates import list_templates
+print(list_templates())
 ```
 
 ---
@@ -347,7 +383,13 @@ Run all cells sequentially. All notebooks are self-contained and generate all fi
 - **Davies, Mesinger & Murray (2025)** — [arXiv:2504.17254](https://arxiv.org/abs/2504.17254) — 21cmFASTv4 discrete source model
 - **Gagnon-Hartman, Davies & Mesinger (2025)** — [arXiv:2502.20447](https://arxiv.org/abs/2502.20447) — galaxy–21 cm cross-correlation detection forecasts
 - **La Plante et al. (2023)** — [arXiv:2205.09770](https://arxiv.org/abs/2205.09770) — uncertainty equations, HERA noise model, and foreground wedge prescription
+- **Park et al. (2019)**, MNRAS, 484, 933 — 21cmFAST source model parameterisation (stellar-halo relation, SFR timescale `t_STAR × t_H`)
 - **Euclid Collaboration (2022)** — [arXiv:2108.01201](https://arxiv.org/abs/2108.01201) — Euclid survey specifications
+- **Bouwens et al. (2021)**, ApJ, 908, 24 — UV luminosity function at $z \sim 6$–$8$
+- **Finkelstein et al. (2015)**, ApJ, 810, 71 — UV luminosity function at $z \sim 7$–$8$
+- **Speagle et al. (2014)**, ApJS, 214, 15 — star-forming main sequence calibration (Eq. 28)
+- **Schreiber et al. (2015)**, A&A, 575, A74 — star-forming main sequence at high redshift
+- **Song et al. (2016)**, ApJ, 825, 5 — stellar mass–UV magnitude relation at $z \sim 7$
 - **Lidz et al. (2009)**, ApJ, 690, 252 — [arXiv:0806.1055](https://arxiv.org/abs/0806.1055) — physical signal power spectra
 - **Bardeen, Bond, Kaiser & Szalay (1986)**, ApJ, 304, 15 — BBKS transfer function
 - **Kaiser (1987)**, MNRAS, 227, 1 — redshift-space distortions
