@@ -196,6 +196,73 @@ Lightcone counterpart to notebook 2. Uses `RectilinearLightconer` + `run_lightco
 
 A refactored version of notebook 3 split into three independent parts for cluster use. See the [HPC lightcone pipeline](#hpc-lightcone-pipeline-recommended-for-cluster-use) section above.
 
+#### `notebooks/plot_fields.ipynb` — figures and literature references
+
+Produces seven groups of plots from `outputs/lightcone_data.h5`. The literature equations used in each are documented below.
+
+**Figure group 1–2: Halo catalogue and SFR distributions**
+
+No literature overlays. These are diagnostic plots (projected halo positions, halo mass histogram, halos overlaid on a $\delta T_b$ slice, SFR histogram, SFR vs $M_\mathrm{halo}$, SFR vs $M_\star$) showing the raw 21cmFAST catalogue.
+
+---
+
+**Figure group 3–4: Lightcone field slices and wide-format EoR lightcone**
+
+No literature overlays. These are visualisation panels (transverse slice, LOS slice with dual distance/redshift axes, neutral fraction). The wide-format panel uses a custom EoR colourmap styled after Mesinger & Furlanetto (2007).
+
+---
+
+**Figure group 5: UV Luminosity Function**
+
+Simulation data points are converted from SFR to $M_\mathrm{UV}$ and binned into a UVLF. Two Schechter-function curves from the literature are overlaid.
+
+*SFR → $M_\mathrm{UV}$ conversion chain* (implemented in `src/conversions.sfr_to_Muv()`):
+
+| Step | Equation | Reference |
+|------|----------|-----------|
+| SFR → $L_\mathrm{UV}$ | $L_\mathrm{UV} = \mathrm{SFR} / \kappa_\mathrm{UV}$, $\kappa_\mathrm{UV} = 1.15\times10^{-28}\ M_\odot\ \mathrm{yr}^{-1}\ /\ (\mathrm{erg\ s}^{-1}\ \mathrm{Hz}^{-1})$ | Madau & Dickinson (2014), Chabrier IMF, ~1500 Å |
+| $L_\mathrm{UV}$ → $M_\mathrm{UV}$ | $M_\mathrm{AB} = 51.60 - 2.5\log_{10}(L_\nu)$ | Oke & Gunn (1983) |
+
+*Schechter function form* (implemented inline as `schechter_muv()`):
+
+$$\Phi(M) = \frac{\ln 10}{2.5}\,\phi_\star\,10^{0.4(\alpha+1)(M_\star - M)}\,\exp\!\left[-10^{0.4(M_\star - M)}\right]$$
+
+Reference: Schechter (1976, ApJ 203, 297)
+
+*Literature Schechter parameters at $z \sim 7$* (hardcoded in the `literature` list):
+
+| Reference | $\phi_\star$ [Mpc$^{-3}$] | $M_\star$ | $\alpha$ | Source table |
+|-----------|--------------------------|-----------|----------|-------------|
+| Bouwens et al. (2021, ApJ 908, 24) | $2.9\times10^{-4}$ | $-21.03$ | $-2.03$ | Table 5, single-Schechter |
+| Finkelstein et al. (2015, ApJ 810, 71) | $7.4\times10^{-4}$ | $-20.81$ | $-1.87$ | Table 3 |
+
+---
+
+**Figure group 6: Stellar Mass – UV Magnitude Relation**
+
+The simulation median and 16–84th percentile scatter band are plotted. Two literature relations are **defined in the code but commented out** and are not rendered in the current notebook:
+
+| Reference | Relation (as coded) | Note |
+|-----------|---------------------|------|
+| Song et al. (2016, ApJ 825, 5) | $\log_{10}(M_\star/M_\odot) = 8.86 - 0.5\,(M_\mathrm{UV} + 20)$ | Anchored at $M_\mathrm{UV}=-21 \to \log_{10} M_\star = 9.36$; slope from their Figure 5 |
+| González et al. (2011, ApJ 736, 133) | $\log_{10}(M_\star/M_\odot) = 9.06 - 0.5\,(M_\mathrm{UV} + 20)$ | $\sim 0.2$ dex higher normalisation from constant-SFH SED assumption |
+
+The $M_\mathrm{UV}$ axis uses the same `sfr_to_Muv()` chain as Figure group 5.
+
+---
+
+**Figure group 7: Star-forming Main Sequence**
+
+Simulation median and scatter band (all halos, no magnitude cut) are plotted alongside three curves:
+
+| Curve | Equation (as coded) | Reference |
+|-------|---------------------|-----------|
+| Speagle+14 | $\log_{10}\mathrm{SFR} = (0.84 - 0.026\,t)\,\log_{10}M_\star - (6.51 - 0.11\,t)$, $t$ = cosmic age [Gyr] via `Planck18.age(z_obs)` | Speagle et al. (2014, ApJS 214, 15), Eq. 28 |
+| Schreiber+15 | $\log_{10}\mathrm{SFR} = \log_{10}M_\star - 8$ (i.e., $\mathrm{sSFR} = 10\ \mathrm{Gyr}^{-1}$) | Schreiber et al. (2015, A&A 575, A74), high-$z$ limit |
+| 21cmFAST model | $\log_{10}\mathrm{SFR} = \log_{10}M_\star - \log_{10}t_\mathrm{sf}$, $t_\mathrm{sf} = t_\star\,t_H(z)$, $t_\star = 0.5$ | Park et al. (2019), Eq. 3; `scaling_relations.c` |
+
+The 21cmFAST model line has no free parameters — it is a pure prediction from the simulation's SFR prescription. At $z = 7$, $t_H \approx 1.14$ Gyr gives $t_\mathrm{sf} \approx 570$ Myr and $\mathrm{sSFR} \approx 1.75\ \mathrm{Gyr}^{-1}$, which is $\sim 0.76$ dex below Schreiber+15. This offset is a physical model difference (the 21cmFAST `simple` template assumes a longer star-formation timescale), not a numerical error.
+
 ---
 
 ## 21cmFASTv4 `HaloBox` API Notes
