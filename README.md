@@ -233,8 +233,8 @@ Reference: Schechter (1976, ApJ 203, 297)
 
 | Reference | $\phi_\star$ [Mpc$^{-3}$] | $M_\star$ | $\alpha$ | Source table |
 |-----------|--------------------------|-----------|----------|-------------|
-| Bouwens et al. (2021, ApJ 908, 24) | $2.9\times10^{-4}$ | $-21.03$ | $-2.03$ | Table 5, single-Schechter |
-| Finkelstein et al. (2015, ApJ 810, 71) | $7.4\times10^{-4}$ | $-20.81$ | $-1.87$ | Table 3 |
+| Bouwens et al. (2021, AJ 162, 47) | $1.9\times10^{-4}$ | $-21.15$ | $-2.06$ | Table 5, single-Schechter, $z=6.8$ |
+| Finkelstein et al. (2015, ApJ 810, 71) | $1.57\times10^{-4}$ | $-21.03$ | $-2.03$ | Table 4, $z=7$ |
 
 ---
 
@@ -245,7 +245,7 @@ The simulation median and 16–84th percentile scatter band are plotted. Two lit
 | Reference | Relation (as coded) | Note |
 |-----------|---------------------|------|
 | Song et al. (2016, ApJ 825, 5) | $\log_{10}(M_\star/M_\odot) = 8.86 - 0.5\,(M_\mathrm{UV} + 20)$ | Anchored at $M_\mathrm{UV}=-21 \to \log_{10} M_\star = 9.36$; slope from their Figure 5 |
-| González et al. (2011, ApJ 736, 133) | $\log_{10}(M_\star/M_\odot) = 9.06 - 0.5\,(M_\mathrm{UV} + 20)$ | $\sim 0.2$ dex higher normalisation from constant-SFH SED assumption |
+| González et al. (2010, ApJ 713, 115) | $\log_{10}(M_\star/M_\odot) = 9.06 - 0.5\,(M_\mathrm{UV} + 20)$ | $\sim 0.2$ dex higher normalisation from constant-SFH SED assumption |
 
 The $M_\mathrm{UV}$ axis uses the same `sfr_to_Muv()` chain as Figure group 5.
 
@@ -450,13 +450,15 @@ Run all cells sequentially. All notebooks are self-contained and generate all fi
 - **Davies, Mesinger & Murray (2025)** — [arXiv:2504.17254](https://arxiv.org/abs/2504.17254) — 21cmFASTv4 discrete source model
 - **Gagnon-Hartman, Davies & Mesinger (2025)** — [arXiv:2502.20447](https://arxiv.org/abs/2502.20447) — galaxy–21 cm cross-correlation detection forecasts
 - **La Plante et al. (2023)** — [arXiv:2205.09770](https://arxiv.org/abs/2205.09770) — uncertainty equations, HERA noise model, and foreground wedge prescription
-- **Park et al. (2019)**, MNRAS, 484, 933 — 21cmFAST source model parameterisation (stellar-halo relation, SFR timescale `t_STAR × t_H`)
+- **Park et al. (2019)**, MNRAS, 484, 933 — [arXiv:1809.08995](https://arxiv.org/abs/1809.08995) — 21cmFAST source model parameterisation (stellar-halo relation, SFR timescale `t_STAR × t_H`)
 - **Euclid Collaboration (2022)** — [arXiv:2108.01201](https://arxiv.org/abs/2108.01201) — Euclid survey specifications
-- **Bouwens et al. (2021)**, ApJ, 908, 24 — UV luminosity function at $z \sim 6$–$8$
-- **Finkelstein et al. (2015)**, ApJ, 810, 71 — UV luminosity function at $z \sim 7$–$8$
-- **Speagle et al. (2014)**, ApJS, 214, 15 — star-forming main sequence calibration (Eq. 28)
-- **Schreiber et al. (2015)**, A&A, 575, A74 — star-forming main sequence at high redshift
-- **Song et al. (2016)**, ApJ, 825, 5 — stellar mass–UV magnitude relation at $z \sim 7$
+- **Bouwens et al. (2021)**, AJ, 162, 47 — [arXiv:2102.07775](https://arxiv.org/abs/2102.07775) — UV luminosity function at $z \sim 2$–$9$
+- **Finkelstein et al. (2015)**, ApJ, 810, 71 — [arXiv:1410.5439](https://arxiv.org/abs/1410.5439) — UV luminosity function at $z \sim 4$–$8$
+- **Speagle et al. (2014)**, ApJS, 214, 15 — [arXiv:1405.2041](https://arxiv.org/abs/1405.2041) — star-forming main sequence calibration (Eq. 28)
+- **Schreiber et al. (2015)**, A&A, 575, A74 — [arXiv:1409.5433](https://arxiv.org/abs/1409.5433) — star-forming main sequence at high redshift
+- **Song et al. (2016)**, ApJ, 825, 5 — [arXiv:1507.05636](https://arxiv.org/abs/1507.05636) — stellar mass–UV magnitude relation at $z \sim 4$–$8$
+- **González et al. (2010)**, ApJ, 713, 115 — [arXiv:0909.3517](https://arxiv.org/abs/0909.3517) — stellar mass density and sSFR at $z \sim 7$ (constant-SFH SED fitting)
+- **González et al. (2011)**, ApJL, 735, L34 — [arXiv:1008.3901](https://arxiv.org/abs/1008.3901) — galaxy stellar mass functions and $M_\star$–$L_\mathrm{UV}$ relation at $z \sim 4$–$7$
 - **Lidz et al. (2009)**, ApJ, 690, 252 — [arXiv:0806.1055](https://arxiv.org/abs/0806.1055) — physical signal power spectra
 - **Bardeen, Bond, Kaiser & Szalay (1986)**, ApJ, 304, 15 — BBKS transfer function
 - **Kaiser (1987)**, MNRAS, 227, 1 — redshift-space distortions
@@ -466,4 +468,4 @@ Run all cells sequentially. All notebooks are self-contained and generate all fi
 - **Oke & Gunn (1983)**, ApJ, 266, 713 — AB magnitude system
 - **Madau & Dickinson (2014)**, ARA&A, 52, 415 — [arXiv:1403.0007](https://arxiv.org/abs/1403.0007) — UV luminosity–SFR calibration ($\kappa_\mathrm{UV}$, Chabrier IMF)
 - **Sheth & Tormen (1999)**, MNRAS, 308, 119 — [arXiv:astro-ph/9901122](https://arxiv.org/abs/astro-ph/9901122) — halo mass function and bias formula
-- **Murray, Robotham & Power (2013)**, Astron. Comput., 3, 23 — `hmf` halo mass function code
+- **Murray, Robotham & Power (2013)**, Astron. Comput., 3, 23 — [arXiv:1306.6721](https://arxiv.org/abs/1306.6721) — `hmf` halo mass function code

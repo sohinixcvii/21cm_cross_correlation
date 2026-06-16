@@ -7,6 +7,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **`notebooks/plot_fields.ipynb` — Bouwens et al. (2021) journal citation:**
+  All occurrences of "ApJ 908, 24" corrected to "AJ 162, 47". The paper is
+  published in *The Astronomical Journal*, not *The Astrophysical Journal*.
+  Affected cells: section-5 header markdown (`ev0xfh6438f`) and the
+  `literature` list comment (`knrobm93rko`). Parameter values (φ\* = 0.19×10⁻³,
+  M\* = −21.15, α = −2.06 from Table 5, z = 6.8) were already correct.
+
+- **`notebooks/plot_fields.ipynb` — Finkelstein et al. (2015) Schechter
+  parameters (`knrobm93rko`):** The `literature` list used values from Table 3
+  (the galaxy catalogue), not Table 4 (the Schechter fits). Corrected to the
+  Table 4, z = 7 values:
+  - φ\*: `0.74e-3` → `1.57e-4` Mpc⁻³
+  - M\*: `−20.81` → `−21.03`
+  - α: `−1.87` → `−2.03`
+  Comment updated from "Table 3" to "Table 4".
+
+- **`notebooks/plot_fields.ipynb` — González citation corrected to 2010
+  paper:** The function `gonzalez2011_z7` and all associated labels and
+  comments cited "González et al. (2011, ApJ 736, 133)", which resolves to an
+  unrelated Galactic Center paper (An et al. 2011). The intended reference is
+  González et al. (2010, ApJ 713, 115), whose constant-SFH SED fitting at
+  z ~ 7 motivates the ~0.2 dex higher normalisation relative to Song+16.
+  Renamed to `gonzalez2010_z7`; labels updated from "González+11" to
+  "González+10" throughout cells `1c28abd8`, `zcmcw9903x`, and `wbf9ns3xkgb`.
+
+- **`README.md` — Bouwens et al. (2021) values and citation:** The UVLF table
+  in Figure group 5 listed wrong journal ("ApJ 908, 24"), wrong φ\*
+  (2.9×10⁻⁴), wrong M\* (−21.03), and wrong α (−2.03). Corrected to AJ 162,
+  47 with Table 5 (z = 6.8) values: φ\* = 1.9×10⁻⁴, M\* = −21.15, α = −2.06.
+  Corresponding References entry also corrected.
+
+- **`README.md` — Finkelstein et al. (2015) values and table reference:**
+  Figure group 5 UVLF table listed Table 3 with wrong Schechter parameters
+  (φ\* = 7.4×10⁻⁴, M\* = −20.81, α = −1.87). Corrected to Table 4, z = 7:
+  φ\* = 1.57×10⁻⁴, M\* = −21.03, α = −2.03.
+
+- **`README.md` — González citation in Figure group 6 table:** "González et
+  al. (2011, ApJ 736, 133)" replaced with "González et al. (2010, ApJ 713,
+  115)" for the same reason as the notebook fix above.
+
+### Changed
+- **`README.md` — References section:** Added arXiv links to all entries that
+  previously lacked them:
+
+  | Paper | arXiv |
+  |-------|-------|
+  | Park et al. (2019) | [1809.08995](https://arxiv.org/abs/1809.08995) |
+  | Bouwens et al. (2021) | [2102.07775](https://arxiv.org/abs/2102.07775) |
+  | Finkelstein et al. (2015) | [1410.5439](https://arxiv.org/abs/1410.5439) |
+  | Speagle et al. (2014) | [1405.2041](https://arxiv.org/abs/1405.2041) |
+  | Schreiber et al. (2015) | [1409.5433](https://arxiv.org/abs/1409.5433) |
+  | Song et al. (2016) | [1507.05636](https://arxiv.org/abs/1507.05636) |
+  | Murray et al. (2013) | [1306.6721](https://arxiv.org/abs/1306.6721) |
+
+  Bardeen et al. (1986), Kaiser (1987), and Oke & Gunn (1983) predate arXiv
+  and have no preprint record. Two new entries added for both González papers:
+  - González et al. (2010), ApJ 713, 115 — [arXiv:0909.3517](https://arxiv.org/abs/0909.3517)
+  - González et al. (2011), ApJL 735, L34 — [arXiv:1008.3901](https://arxiv.org/abs/1008.3901)
+
 ### Added
 - **`src/conversions.py` — UV luminosity–SFR conversions:**
   - `_KAPPA_UV_MADAU14 = 1.15e-28` — module-level constant for the Madau &
