@@ -9,7 +9,7 @@ so the simulation only needs to run once per parameter set.
 
 ```mermaid
 flowchart TD
-    A["sbatch submit_job.sh\n(SLURM batch job)"] --> B["conda activate 21cmfast"]
+    A["bash submit_job.sh\n(shell launcher)"] --> B["conda activate 21cmfast"]
     B --> C["python run_simulation.py"]
 
     subgraph P1["Part 1 — run_simulation.py (compute node)"]
@@ -38,7 +38,7 @@ flowchart TD
 
 | # | Stage | Where it runs | Input | Output |
 |---|-------|----------------|-------|--------|
-| 1 | `submit_job.sh` — SLURM/shell launcher: activates `21cmfast` conda env, times the run, emails a completion/failure report via `sendmail` | HPC login/compute node | — | `outputs/<job>_<timestamp>.log` |
+| 1 | `submit_job.sh` — shell launcher: activates `21cmfast` conda env, times the run, emails a completion/failure report via `sendmail` | HPC login/compute node | — | `outputs/<job>_<timestamp>.log` |
 | 2 | `run_simulation.py` — **Part 1**: 21cmFASTv4 lightcone, halo catalogue, galaxy field, bias estimate, Kaiser RSD | HPC compute node (headless, `matplotlib.use("Agg")`) | Config block at top of script | `outputs/lightcone_data.h5` |
 | 3 | `notebooks/plot_fields.ipynb` — **Part 2**: diagnostic and literature-comparison figures | Local machine or interactive HPC Jupyter session | `lightcone_data.h5` | Inline figures |
 | 4 | `notebooks/analysis.ipynb` — **Part 3**: 2D cylindrical power spectra, photo-z damping, foreground wedge excision, SNR | Local machine or interactive HPC Jupyter session | `lightcone_data.h5` | Inline figures + SNR summary |
@@ -61,7 +61,7 @@ the HDF5 file, so they are fast to re-run after tweaking a plot.
 
 ```bash
 # On the cluster
-sbatch submit_job.sh                          # Part 1 — writes outputs/lightcone_data.h5
+bash submit_job.sh                            # Part 1 — writes outputs/lightcone_data.h5
                                                 # (emails sohinidutta97@gmail.com on completion/failure)
 
 # Locally, or in an interactive HPC Jupyter session
@@ -71,6 +71,12 @@ jupyter notebook notebooks/analysis.ipynb      # Part 3 — power spectra & SNR
 
 All commands must run inside the `21cmfast` conda environment
 (`conda activate 21cmfast`, or `conda run -n 21cmfast <command>`).
+
+> **`submit_job.sh` is not a SLURM script.** It contains no `#SBATCH`
+> directives and runs in the foreground on whatever node invokes it — hence
+> `bash`, not `sbatch`. To submit it as a true batch job, add the `#SBATCH`
+> directives your cluster requires (`--partition`, `--time`, `--account`,
+> `--cpus-per-task`, …) at the top of the script first.
 
 ## `outputs/lightcone_data.h5` contents
 
@@ -83,3 +89,8 @@ All commands must run inside the `21cmfast` conda environment
 
 See `README.md` for the full science background and equation references, and
 `docs/project_update.md` for the latest run's numerical results.
+
+> **Check the redshift range before running.** The committed configuration in
+> `run_simulation.py` spans only `z_min = 6.995` → `z_max = 7.005`
+> ($L_\mathrm{LOS} = 3.5$ Mpc), a fast smoke-test slab rather than a science
+> lightcone. See the fiducial-parameter table in `README.md` §4.

@@ -7,6 +7,171 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Notebook consolidation, 2026-08-03 ──────────────────────────────── -->
+
+### Fixed
+- **`21cmfast_HERAxEuclid_lightcone.ipynb` — SFR unit bug (science-affecting):**
+  The notebook consumed `perturbed_halos.sfr` directly, but py21cmfast v4
+  returns it in **M☉ s⁻¹**, not M☉ yr⁻¹. Every UV luminosity, absolute
+  magnitude, and $M_\mathrm{UV}$-based selection derived from it was therefore
+  off by a factor of $3.15576\times10^{7}$ (~7.5 dex). This is the same bug
+  already diagnosed in `docs/Low_SFR_fix.md` and already fixed in
+  `run_simulation.py` (`_SEC_PER_YR`, line 334) and `notebooks/plot_fields.ipynb`
+  (via `src.conversions.sfr_to_Muv`) — it had simply never been back-ported to
+  this notebook. Added the conversion at both points where the halo catalogue
+  SFR is extracted (the halo-catalogue cell and the UV-selection cell).
+  **All $M_\mathrm{UV}$-derived numbers and figures in this notebook change;
+  it must be re-run.** The stored outputs are now stale.
+
+### Changed
+- **`21cmfast_HERAxEuclid.ipynb` → `_archive/21cmfast_HERAxEuclid.ipynb`:**
+  Moved to `_archive/` per the project's no-deletion policy. Measured overlap:
+  50% of its distinct code lines are duplicated in the lightcone notebook, and
+  the remainder is largely re-implemented boilerplate (`hubble_parameter`,
+  matplotlib rcParams, the cylindrical power-spectrum binner, cosmology
+  constants) rather than distinct science. Retained as the only **coeval**
+  reference implementation. README updated throughout: overview list,
+  repository tree, section 2 heading and archive notice, section 3 cross-
+  reference, the three affected Requirements rows, and the Usage block.
+
+- **`21cmfast_HERAxEuclid_lightcone.ipynb` — UV calibration now shared:** The
+  cell-local `K_UV = 1.15e-28` and its inline commentary were replaced with
+  `src.conversions.sfr_to_Luv`, imported once in the imports cell, so the
+  notebook can no longer drift from `run_simulation.py` and the analysis
+  notebooks. The Kennicutt (1998) alternative is retained as a comment
+  documenting the `kappa_uv=1.4e-28` override.
+
+### Removed
+- **`21cmfast_HERAxEuclid_lightcone.ipynb` — internal redundancies:**
+  - Duplicate `get_21cmfast_array()` definition (defined identically in two
+    cells; the second copy also had a truncated docstring). Now defined once.
+  - `OMEGA_M_0 = 0.315` redefined in the galaxy-bias cell despite being set in
+    the ★ CONFIGURATION cell, contradicting that cell's "edit only this cell"
+    contract. Values were identical, so **no numerical change**.
+  - 11 redundant re-imports of `numpy`, `matplotlib.pyplot`, and `py21cmfast`
+    across six cells, all already imported in the imports cell.
+  - A leftover scratch cell (`[x for x in dir(p21c) if "halo" in x.lower()]`)
+    and a trailing empty cell, both after the Summary section.
+
+  Notebook drops from 35 to 33 cells; all 12.51 MB of stored outputs, and an
+  uncommitted user edit in the HMF cell, were preserved verbatim.
+
+- **`src/__pycache__/`** — deleted. Compiled bytecode is a regenerable build
+  artifact already covered by `.gitignore`; removed at the author's explicit
+  request (the project's no-deletion policy is intended for source files).
+
+- **`21cmfast_HERAxEuclid_lightcone.ipynb` — inconsistent bright-end
+  $M_\mathrm{UV}$ cut (science-affecting):** The galaxy-bias cell used
+  `M_UV_bright = -22` while the UV-selection cell running after it rebound
+  `M_UV_bright = -22.66`, so the Sheth-Tormen bias integral was evaluated over
+  a different magnitude range than the galaxy sample it was applied to.
+  **−22.66 is the correct value** (confirmed by the author); −22 was the stale
+  one. Both cuts are now defined once in the ★ CONFIGURATION cell and the
+  scattered redefinitions removed, so the bias integral and the selection can
+  no longer diverge. **The effective galaxy bias $b_\mathrm{gal}$ changes and
+  the notebook must be re-run.**
+
+  The dead `M_UV_limit = -18` config entry — set in the configuration cell but
+  only ever consumed by one `print` and one plot label, never by the selection
+  logic — was folded into the new `M_UV_faint` (same value, now actually
+  authoritative). Both consumers were repointed.
+
+<!-- ─── Documentation audit, 2026-08-03 ─────────────────────────────────── -->
+
+### Fixed
+- **`README.md` — Figure group 6 literature relations mis-described:** The text
+  claimed *both* the Song+16 and González+10 $M_\star$–$M_\mathrm{UV}$
+  relations were "defined in the code but commented out and are not rendered".
+  In `notebooks/plot_fields.ipynb` (cell `wbf9ns3xkgb`) `song2016_z7` **is**
+  actively plotted with the label `Song+16 $z\sim7$`; only `gonzalez2010_z7`
+  is commented out. The table now carries an explicit per-row **Status**
+  column ("Plotted" / "Defined but commented out").
+
+- **`README.md`, `PIPELINE.md` — `sbatch submit_job.sh` is not a valid
+  invocation:** `submit_job.sh` contains **zero** `#SBATCH` directives (no
+  `--partition`, `--time`, or `--account`), and its own usage header specifies
+  `bash submit_job.sh`. Submitting it via `sbatch` would be rejected or
+  silently assigned default resources. All four occurrences corrected to
+  `bash submit_job.sh` (README workflow block, README Usage block, PIPELINE
+  Mermaid node `A`, PIPELINE "Running it" block). A note in both documents now
+  states that `#SBATCH` directives must be added before the script can be
+  submitted as a true batch job. The README file table and the PIPELINE stage
+  table no longer describe it as a "SLURM batch submission script".
+
+- **`env.yml` — did not reproduce the environment:** The file listed only
+  `python=3.11` and `ipykernel`, so `conda env create -f env.yml` produced an
+  environment in which no notebook or script could run. Added the FFTW/GSL
+  build dependencies (required *before* the pip step or the 21cmFAST C
+  extension build fails with `cannot find -lfftw3f`), the scientific stack
+  (`numpy`, `scipy`, `astropy`, `matplotlib`, `h5py`), `jupyter`, and a `pip:`
+  section installing `21cmFAST==4.1.1` and `hmf>=3.5`. Version floors were
+  chosen to be satisfied by the versions currently installed in the working
+  `21cmfast` environment.
+
+### Added
+- **`README.md` — Installation section:** Previously absent entirely. Documents
+  `conda env create -f env.yml`, the `py21cmfast.__version__` verification
+  step, why FFTW/GSL must precede the pip install, `requirements.txt` for
+  reproducing the exact pinned environment, and a pointer to
+  `docs/INSTALL_21cmFASTv4.md` for the CSD3-specific quota, `CONDA_NO_PLUGINS`,
+  and FFTW-linking problems that `conda env create` cannot resolve on its own.
+
+- **`README.md` — Repository structure tree:** New top-level section giving an
+  annotated file tree, marking `outputs/` and `resources/` as gitignored.
+
+- **`README.md` — Documentation index:** New section with a table linking all
+  seven companion documents. Six of them (`PIPELINE.md` beyond a single inline
+  link, `CHANGELOG.md`, and four of the five `docs/*.md` files) were previously
+  unreachable from the README — only `docs/Low_SFR_fix.md` was ever cited.
+
+- **`README.md` — fiducial parameters for the HPC pipeline (§4):** Section 4
+  described `run_simulation.py` only as "a refactored version of notebook 3",
+  implying it inherits notebook 3's $z = 6.5$–$7.5$ range. It does not. Added a
+  full parameter table plus a **thin-slab warning**: the committed config spans
+  $\Delta z = 0.01$ ($z = 6.995$–$7.005$, $L_\mathrm{LOS} = 3.5$ Mpc at
+  $z = 7$). The cell-size-matched slice count would be $N_z = 2$, but
+  `minimum_los_slices = 100` (`run_simulation.py:170`) raises it to 100,
+  yielding a 0.035 Mpc LOS cell against a 2 Mpc transverse cell — a ~57×
+  line-of-sight oversampling. This is a smoke-test slab with negligible
+  redshift evolution, not a science configuration; the production equivalent
+  ($z = 6.5$–$7.5$) gives $L_\mathrm{LOS} = 350.8$ Mpc and $N_z = 175$. A
+  cross-reference was added to `PIPELINE.md`.
+  **The configuration itself was left unchanged — this is a documentation fix
+  only, and the redshift range remains a science decision for the author.**
+
+- **`README.md` — `src/FOV_to_cMpc.py` documentation:** The "Source Modules"
+  section covered only `conversions.py`, leaving this module entirely
+  undocumented. Added its CLI usage example, the full argument table
+  (`--area-deg2`, `--z-min`, `--z-max`, `--n-z`), both importable functions
+  (`survey_volume_from_area`, `transverse_comoving_size_from_area`), and a note
+  that it overlaps with `conversions.volume_from_area` but additionally returns
+  the intermediate solid angle and per-steradian volume.
+
+- **`README.md` — Testing section:** Records the `tests/test_<module>.py`
+  convention and the `conda run -n 21cmfast pytest tests/ -v` command, and
+  states plainly that **no `tests/` directory exists yet**, so `src/` is
+  currently untested. Names the round-trip identities and the
+  `sheth_tormen_bias` squared-peak-height convention as first candidates.
+
+- **`README.md` — Part 1 prerequisite note:** Clarifies that `outputs/` is
+  gitignored, so a fresh clone has no `lightcone_data.h5` and Parts 2–3 fail at
+  the loading cell until `run_simulation.py` has been run. Distinguishes
+  "independent of the simulation run" (never imports 21cmFAST) from "ships with
+  the repository" (it does not). `resources/` noted as local-only.
+
+### Changed
+- **`README.md` — notebook structure lists realigned to actual notebook
+  headers:** Both lists were renumbered prose that did not match the notebooks.
+  - Notebook 3: the brightness-temperature plot was listed as "7b" but is
+    **5b** in the notebook, and every item from "Kaiser RSD" onward was offset
+    by one (README 6 = notebook §4, README 7 = §5). Renumbered to match.
+  - Notebook 1: the 10-item list did not correspond to the notebook's 11
+    sections or their order. Rewritten against the real headers, including an
+    explicit warning that the numbering is non-monotonic — §2c sits *after*
+    §3a, and two distinct subsections are both labelled §3b.
+
+<!-- ─── Earlier unreleased work ─────────────────────────────────────────── -->
+
 ### Added
 - **`PIPELINE.md`** — new top-level document summarising the HPC pipeline
   (`submit_job.sh` → `run_simulation.py` → `outputs/lightcone_data.h5` →

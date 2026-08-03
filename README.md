@@ -6,10 +6,10 @@ Forecasting the detectability of the 21 cm × galaxy cross-power spectrum during
 
 During reionization, neutral hydrogen (H I) emits 21 cm radiation that is **anti-correlated** with the galaxy density field: overdense regions host ionising galaxies and become 21 cm-dark, while underdense regions remain neutral and 21 cm-bright. The cross-power spectrum $P_{21\times\mathrm{gal}}(k_\perp, k_\parallel)$ quantifies this anti-correlation and is a key science target for HERA + Euclid/Roman Space Telescope.
 
-This project contains three complementary notebooks plus a refactored HPC-optimised lightcone pipeline:
+This project contains two active notebooks plus a refactored HPC-optimised lightcone pipeline, with one superseded notebook retained in `_archive/`:
 
 1. **`21cm_galaxy_cross_uncertainty.ipynb`** — analytical framework using semi-analytic signal models and the La Plante et al. (2023) variance estimators.
-2. **`21cmfast_HERAxEuclid.ipynb`** — end-to-end simulation pipeline using 21cmFASTv4 with the discrete source model (Davies et al. 2025), based on a **coeval** (single-snapshot) simulation at $z = 6.5$.
+2. **`_archive/21cmfast_HERAxEuclid.ipynb`** *(archived)* — end-to-end simulation pipeline using 21cmFASTv4 with the discrete source model (Davies et al. 2025), based on a **coeval** (single-snapshot) simulation at $z = 6.5$. Superseded by (3); retained as the coeval reference implementation.
 3. **`21cmfast_HERAxEuclid_lightcone.ipynb`** — same pipeline as (2) but using a **lightcone** simulation spanning a redshift range, producing a non-cubic $(N_\perp \times N_\perp \times N_z)$ volume with continuous redshift evolution along the LOS.
 
 ### HPC lightcone pipeline (recommended for cluster use)
@@ -23,20 +23,71 @@ The lightcone workflow has been split into three self-contained parts for effici
 | `run_simulation.py` | **Part 1** — runs the 21cmFAST lightcone, constructs the galaxy field, estimates galaxy bias, applies Kaiser RSD, and saves all outputs to `outputs/lightcone_data.h5` |
 | `notebooks/plot_fields.ipynb` | **Part 2** — loads the HDF5 output and visualises the simulated fields (halo catalogue, SFR distributions, lightcone slices, EoR brightness temperature plot) |
 | `notebooks/analysis.ipynb` | **Part 3** — loads the HDF5 output and performs all post-simulation calculations: 2D cylindrical power spectra, photo-$z$ damping, foreground wedge excision, SNR estimation, Euclid magnitude/SFR cuts, and effective galaxy bias from the halo catalogue |
-| `submit_job.sh` | SLURM batch submission script for Part 1 |
+| `submit_job.sh` | Launcher for Part 1 — activates the conda env, times the run, and emails a completion/failure report via `sendmail` |
 
 **Workflow:**
 
 ```bash
-# On the HPC cluster — submit the simulation as a batch job
-sbatch submit_job.sh
+# On the HPC cluster — run the simulation
+bash submit_job.sh
 
 # Locally (or in a Jupyter session on the cluster) — visualise and analyse
 jupyter notebook notebooks/plot_fields.ipynb   # Part 2: field plots
 jupyter notebook notebooks/analysis.ipynb      # Part 3: power spectra & SNR
 ```
 
+> **Note:** `submit_job.sh` is a plain shell wrapper — it contains no `#SBATCH`
+> directives, so it runs in the foreground on whatever node invokes it. To
+> submit it through SLURM with `sbatch`, add the appropriate `#SBATCH`
+> directives (`--partition`, `--time`, `--account`, `--cpus-per-task`, …) for
+> your cluster at the top of the script first.
+
 The HDF5 file `outputs/lightcone_data.h5` stores all simulation fields (compressed with gzip) and scalar metadata as attributes, so Parts 2 and 3 are completely independent of the simulation run.
+
+> **Part 1 must be run first.** `outputs/` is listed in `.gitignore`, so a fresh
+> clone contains no `lightcone_data.h5` and Parts 2 and 3 will fail at the
+> loading cell until `run_simulation.py` has produced it. "Independent of the
+> simulation run" means they never import or re-run 21cmFAST — not that the
+> HDF5 file ships with the repository. `resources/` (reference PDFs) is
+> likewise local-only.
+
+## Repository structure
+
+```
+21cm_cross_correlation/
+├── 21cm_galaxy_cross_uncertainty.ipynb    # Notebook 1 — analytical framework
+├── 21cmfast_HERAxEuclid_lightcone.ipynb   # Notebook 3 — monolithic lightcone
+├── run_simulation.py                      # HPC pipeline Part 1 — simulation
+├── submit_job.sh                          # Launcher + email notification
+├── notebooks/
+│   ├── plot_fields.ipynb                  # Part 2 — field & catalogue figures
+│   └── analysis.ipynb                     # Part 3 — power spectra & SNR
+├── src/
+│   ├── conversions.py                     # Cosmological conversion utilities
+│   └── FOV_to_cMpc.py                     # Survey geometry CLI
+├── docs/                                  # Reference & methodology notes
+├── _archive/
+│   └── 21cmfast_HERAxEuclid.ipynb         # Notebook 2 — coeval (superseded)
+├── outputs/                               # Simulation products (gitignored)
+├── resources/                             # Reference PDFs (gitignored)
+├── env.yml                                # Conda environment specification
+├── requirements.txt                       # Pinned pip freeze of the env
+├── PIPELINE.md                            # HPC pipeline summary + flowchart
+├── CHANGELOG.md                           # Record of all project changes
+└── README.md                              # This file
+```
+
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| [`PIPELINE.md`](PIPELINE.md) | HPC pipeline summary, Mermaid flowchart, stage table, and the `lightcone_data.h5` schema |
+| [`CHANGELOG.md`](CHANGELOG.md) | Chronological record of all changes, including corrected literature values |
+| [`docs/INSTALL_21cmFASTv4.md`](docs/INSTALL_21cmFASTv4.md) | Step-by-step 21cmFAST v4.1.1 install on CSD3/HPC, plus fixes for quota, conda-plugin, and FFTW linking failures |
+| [`docs/Galaxy_bias_formalism.md`](docs/Galaxy_bias_formalism.md) | Methodology for the effective linear galaxy bias from a 21cmFAST halo catalogue under a Euclid $M_\mathrm{UV}$ cut |
+| [`docs/halo_catalogue_reference.md`](docs/halo_catalogue_reference.md) | Field-by-field reference for the v4 halo catalogue, verified against py21cmfast v4.x |
+| [`docs/Low_SFR_fix.md`](docs/Low_SFR_fix.md) | Diagnosis of the ~7.5 dex SFR offset in the main-sequence plot (the M☉ s⁻¹ unit bug) |
+| [`docs/project_update.md`](docs/project_update.md) | Latest run's simulation parameters and numerical results |
 
 ## Notebooks
 
@@ -46,16 +97,28 @@ Implements the variance estimators (Equations 15–17) for the cross-spectrum an
 
 **Structure:**
 
-1. Imports and setup
-2. $T_0(z)$ — brightness-temperature scaling factor across EoR redshifts
-3. Photo-$z$ damping — Gaussian kernel $W(k_\parallel)$ from photometric redshift uncertainty
-4. Fourier grid — 2D logarithmic $(k_\perp, k_\parallel)$ grid and helper functions
-5. Signal spectra — CDM matter power spectrum (BBKS transfer function, $\sigma_8$ normalisation) combined with the Lidz et al. (2009) reionization bias model
-6. HERA thermal noise — physically motivated $P_N^{21}$ from Eq. 11 with baseline density model
-7. Variance estimators — Eqs. 15–17 for all three spectra
-8. SNR and detectability — per-mode SNR maps, cumulative SNR vs $k_\mathrm{max}$, and overall detection significance
-9. Photo-$z$ impact — SNR degradation as a function of $\sigma_z$
-10. Redshift evolution — uncertainty and SNR trends across $6 \leq z \leq 12$
+Section numbers below match the notebook's own headers. Note that the numbering
+is non-monotonic in places: the Fourier-grid section is labelled **2c** but sits
+*after* section 3a in the file, and there are two subsections labelled **3b**.
+
+- **1** Imports
+- **2** $T_0(z)$ — brightness-temperature scaling factor across EoR redshifts (Eq. 6)
+- **2b** Photo-$z$ damping — Gaussian kernel $W(k_\parallel)$ from photometric redshift uncertainty
+- **3** Proxy power spectra
+  - **3a** CDM matter power spectrum (BBKS transfer function, $\sigma_8$ normalisation) and noise power spectra
+  - **3b** Physical signal spectra — Lidz et al. (2009) reionization bias model
+  - **2c** Fourier grid — 2D logarithmic $(k_\perp, k_\parallel)$ grid and helper functions
+  - **3.1** Visualise the proxy power spectra
+  - **3b** Applying photo-$z$ damping to the observed power spectra
+  - **3d** HERA thermal noise — physically motivated $P_N^{21}$ from Eq. 11 with baseline density model
+- **4** Variance of the galaxy power spectrum (Eq. 17)
+- **5** Variance of the 21 cm power spectrum (Eq. 16)
+- **6** Variance of the 21 cm × galaxy cross-power spectrum (Eq. 15)
+- **7** Signal-to-noise ratio — overall detectability (7a) and the photo-$z$ uncertainty budget (7b)
+- **8** Diagnostic 2-D maps
+- **9** 1-D slices along the diagonal $k_\perp = k_\parallel$
+- **10** Redshift evolution of the uncertainty at a fixed mode, and of SNR for different photo-$z$ errors (10b)
+- **11** Summary and next steps
 
 **Equations implemented:**
 
@@ -82,7 +145,12 @@ Implements the variance estimators (Equations 15–17) for the cross-spectrum an
 
 ---
 
-### 2. `21cmfast_HERAxEuclid.ipynb`
+### 2. `_archive/21cmfast_HERAxEuclid.ipynb` *(archived)*
+
+> **Archived 2026-08-03.** Half of this notebook's code is duplicated in notebook 3, and its
+> remaining unique content is largely re-implemented boilerplate rather than distinct science.
+> It is kept in `_archive/` as the only **coeval** reference implementation and for the
+> coeval-vs-lightcone comparison; it is no longer part of the active workflow.
 
 End-to-end HERA × Euclid cross-correlation workflow using 21cmFASTv4 with the discrete source (CHMF-SAMPLER) model. Runs a **coeval** simulation at $z = 6.5$, constructs the galaxy density field from the `HaloBox` SFR proxy, and computes 2D cylindrical power spectra with foreground wedge excision and photo-$z$ damping.
 
@@ -132,7 +200,7 @@ End-to-end HERA × Euclid cross-correlation workflow using 21cmFASTv4 with the d
 
 ### 3. `21cmfast_HERAxEuclid_lightcone.ipynb`
 
-Lightcone counterpart to notebook 2. Uses `RectilinearLightconer` + `run_lightcone` to produce a self-consistent lightcone over a redshift range (default $z = 6.5$–$7.5$), then applies the same galaxy field construction, Kaiser RSD, 2D power spectrum calculation, and SNR estimation as the coeval notebook.
+Lightcone counterpart to the archived coeval notebook (2). Uses `RectilinearLightconer` + `run_lightcone` to produce a self-consistent lightcone over a redshift range (default $z = 6.5$–$7.5$), then applies the same galaxy field construction, Kaiser RSD, 2D power spectrum calculation, and SNR estimation as the coeval notebook.
 
 **Key differences from the coeval version:**
 
@@ -146,26 +214,28 @@ Lightcone counterpart to notebook 2. Uses `RectilinearLightconer` + `run_lightco
 
 **Structure:**
 
-1. Imports and setup
-2. **Configuration cell** — all user-adjustable parameters in one place
-3. Derived quantities (LOS geometry, node redshifts)
-4. Run 21cmFASTv4 lightcone simulation
-5. Construct galaxy density field — from lightcone `halo_sfr` (3a) with a
-   synthetic Poisson-sampled fallback for zero-field cases (3b); galaxy bias
-   estimated via HMF integration over the Euclid UV magnitude range
-6. Kaiser RSD applied in Fourier space
-7. Visualise lightcone — transverse (x–y) slice + LOS (x–z) slice with
-   **LOS on the x-axis and transverse on the y-axis** (standard convention);
-   secondary redshift axis on top via `twiny()`
-7b. **Brightness temperature evolution plot** — wide-format (16×3.5") lightcone
-   slice styled after Mesinger & Furlanetto (2007), with a custom EoR colourmap
-   (dark = ionised, warm/bright = neutral), dual x-axes (comoving distance +
-   redshift), and observed frequency range in the title
-8. Compute 2D cylindrical power spectra (non-cubic box)
-9. Plot power spectra with foreground wedge overlays
-10. Photo-$z$ damping and foreground wedge excision
-11. Per-mode SNR map and total detection significance
-12. Summary — coeval vs. lightcone comparison table and next-step recommendations
+Section numbers below match the notebook's own headers.
+
+- **Imports and setup**
+- **★ CONFIGURATION** — all user-adjustable parameters in one cell
+- **1** Derived quantities (LOS geometry, node redshifts)
+- **2** Run 21cmFASTv4 lightcone simulation
+- **3** Construct galaxy density field — from lightcone `halo_sfr` (3a) with a
+  synthetic Poisson-sampled fallback for zero-field cases (3b); galaxy bias
+  estimated via HMF integration over the Euclid UV magnitude range
+- **4** Kaiser RSD applied in Fourier space
+- **5** Visualise lightcone — transverse (x–y) slice + LOS (x–z) slice with
+  **LOS on the x-axis and transverse on the y-axis** (standard convention);
+  secondary redshift axis on top via `twiny()`
+- **5b** Brightness temperature evolution plot — wide-format (16×3.5") lightcone
+  slice styled after Mesinger & Furlanetto (2007), with a custom EoR colourmap
+  (dark = ionised, warm/bright = neutral), dual x-axes (comoving distance +
+  redshift), and observed frequency range in the title
+- **6** Compute 2D cylindrical power spectra (non-cubic box)
+- **7** Plot power spectra with foreground wedge overlays
+- **8** Photo-$z$ damping and foreground wedge excision
+- **9** Per-mode SNR map and total detection significance
+- **10** Summary — coeval vs. lightcone comparison table and next-step recommendations
 
 **Equations implemented:**
 
@@ -197,6 +267,36 @@ Lightcone counterpart to notebook 2. Uses `RectilinearLightconer` + `run_lightco
 ### 4. HPC pipeline — `run_simulation.py` + `notebooks/plot_fields.ipynb` + `notebooks/analysis.ipynb`
 
 A refactored version of notebook 3 split into three independent parts for cluster use. See the [HPC lightcone pipeline](#hpc-lightcone-pipeline-recommended-for-cluster-use) section above.
+
+**Fiducial parameters** (configuration block at the top of `run_simulation.py`) — these are *not* identical to notebook 3's:
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `HII_DIM` | 128 | Simulation grid cells per side |
+| `BOX_LEN` | 256 Mpc | Transverse box size |
+| `DIM` | `3 × HII_DIM` = 384 | High-res grid for initial conditions |
+| $z_\mathrm{min}$, $z_\mathrm{max}$ | **6.995, 7.005** | Lightcone redshift range — see the thin-slab note below |
+| $z_\mathrm{obs}$ | 7.0 | Reference redshift (midpoint) |
+| `minimum_los_slices` | 100 | Floor on $N_z$, overriding the cell-size-matched value |
+| $M_\mathrm{UV}$ limit | $< -18$ | Euclid galaxy selection |
+| $\sigma_z$ | 0.059 | Euclid photo-$z$ uncertainty |
+| $\bar{n}_\mathrm{gal}$ | $3\times10^{-3}\ h^3\ \mathrm{Mpc}^{-3}$ | Mean galaxy number density |
+| $b_\mathrm{gal}$ | 8 | Fallback; overwritten by the HMF estimate when `hmf` is available |
+| $t_\mathrm{obs}$ | 1000 h | Integration time |
+| Bandwidth | 8 MHz | HERA per-band bandwidth |
+| Wedge buffer | 0.02 Mpc$^{-1}$ | Safety margin beyond the horizon line |
+| PS binning | 20 × 20 | $(k_\perp, k_\parallel)$ bins |
+| Source model | `from_template(["simple"])`, `random_seed=42` | Grid-based halos, no Ts fluctuations |
+
+> **Thin-slab test configuration:** the committed $z$ range spans only
+> $\Delta z = 0.01$, i.e. $L_\mathrm{LOS} = 3.5$ Mpc at $z = 7$. The
+> cell-size-matched slice count would be $N_z = 2$, but `minimum_los_slices`
+> raises it to 100, giving a 0.035 Mpc LOS cell against a 2 Mpc transverse
+> cell — a $\sim 57\times$ oversampling along the line of sight. This is a
+> fast smoke-test setting, **not** a science configuration: it produces a
+> quasi-coeval slab with negligible redshift evolution. For a production run
+> matching notebook 3, set `z_min = 6.5`, `z_max = 7.5`
+> ($L_\mathrm{LOS} = 350.8$ Mpc, $N_z = 175$ at the natural cell size).
 
 #### `notebooks/plot_fields.ipynb` — figures and literature references
 
@@ -242,12 +342,12 @@ Reference: Schechter (1976, ApJ 203, 297)
 
 **Figure group 6: Stellar Mass – UV Magnitude Relation**
 
-The simulation median and 16–84th percentile scatter band are plotted. Two literature relations are **defined in the code but commented out** and are not rendered in the current notebook:
+The simulation median and 16–84th percentile scatter band are plotted. Two literature relations are defined in the code; only the first is currently rendered:
 
-| Reference | Relation (as coded) | Note |
-|-----------|---------------------|------|
-| Song et al. (2016, ApJ 825, 5) | $\log_{10}(M_\star/M_\odot) = 8.86 - 0.5\,(M_\mathrm{UV} + 20)$ | Anchored at $M_\mathrm{UV}=-21 \to \log_{10} M_\star = 9.36$; slope from their Figure 5 |
-| González et al. (2010, ApJ 713, 115) | $\log_{10}(M_\star/M_\odot) = 9.06 - 0.5\,(M_\mathrm{UV} + 20)$ | $\sim 0.2$ dex higher normalisation from constant-SFH SED assumption |
+| Reference | Relation (as coded) | Status | Note |
+|-----------|---------------------|--------|------|
+| Song et al. (2016, ApJ 825, 5) | $\log_{10}(M_\star/M_\odot) = 8.86 - 0.5\,(M_\mathrm{UV} + 20)$ | **Plotted** | Anchored at $M_\mathrm{UV}=-21 \to \log_{10} M_\star = 9.36$; slope from their Figure 5 |
+| González et al. (2010, ApJ 713, 115) | $\log_{10}(M_\star/M_\odot) = 9.06 - 0.5\,(M_\mathrm{UV} + 20)$ | Defined but **commented out** | $\sim 0.2$ dex higher normalisation from constant-SFH SED assumption |
 
 The $M_\mathrm{UV}$ axis uses the same `sfr_to_Muv()` chain as Figure group 5.
 
@@ -408,7 +508,70 @@ override.
 
 **Dependencies:** `numpy`, `astropy`, `scipy`
 
+### `src/FOV_to_cMpc.py`
+
+Standalone command-line utility that converts a survey field of view and
+redshift range into comoving survey geometry — solid angle, comoving volume,
+transverse comoving area, and the equivalent cubic box side length. Useful for
+checking that a simulation `BOX_LEN` is representative of the intended Euclid
+survey footprint.
+
+```bash
+conda run -n 21cmfast python src/FOV_to_cMpc.py --area-deg2 0.53 --z-min 6.0 --z-max 7.0
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `--area-deg2` | yes | Survey field of view / area [deg²] |
+| `--z-min` | yes | Lower redshift bound |
+| `--z-max` | yes | Upper redshift bound |
+| `--n-z` | no (default 1000) | Redshift samples for Simpson integration |
+
+It also exposes two importable functions:
+
+| Function | Description |
+|----------|-------------|
+| `survey_volume_from_area(area_deg2, z_min, z_max, cosmology=Planck18, n_z=1000)` | → `(volume [Mpc³], solid angle [sr], volume per steradian)` |
+| `transverse_comoving_size_from_area(area_deg2, z, cosmology=Planck18)` | → `(side length [Mpc], transverse area [Mpc²])` at a single redshift |
+
+**Dependencies:** `numpy`, `astropy`, `scipy`
+
+> **Overlap note:** `survey_volume_from_area` here and `volume_from_area` in
+> `conversions.py` compute the same quantity by the same method;
+> `FOV_to_cMpc.py` additionally returns the intermediate solid angle and
+> per-steradian volume, and wraps everything in a CLI.
+
 ---
+
+## Installation
+
+All commands must run inside the `21cmfast` conda environment.
+
+```bash
+# Create the environment (installs fftw/gsl, then pip-installs 21cmFAST)
+conda env create -f env.yml
+conda activate 21cmfast
+
+# Verify the 21cmFAST C extensions built correctly
+python -c "import py21cmfast; print(py21cmfast.__version__)"   # → 4.1.1
+```
+
+`21cmFAST` compiles C extensions at install time and links against FFTW and
+GSL, which is why those must come from conda-forge *before* the pip step —
+`env.yml` orders this correctly.
+
+**On HPC systems**, follow [`docs/INSTALL_21cmFASTv4.md`](docs/INSTALL_21cmFASTv4.md)
+instead. It covers the CSD3-specific problems that `conda env create` will not
+solve on its own: home-directory quota exhaustion during the pip build
+(redirect `PIP_CACHE_DIR`/`XDG_CACHE_HOME` to scratch), `conda-libmamba-solver`
+entry-point failures (`CONDA_NO_PLUGINS=true`), and FFTW linking errors.
+
+To reproduce the exact environment this project was last run in, use the pinned
+freeze instead of the version ranges in `env.yml`:
+
+```bash
+pip install -r requirements.txt
+```
 
 ## Requirements
 
@@ -416,9 +579,9 @@ override.
 |---------|---------|
 | `numpy` | All notebooks, `src/conversions.py` |
 | `matplotlib` | All notebooks |
-| `scipy` | `21cmfast_HERAxEuclid.ipynb`, `21cmfast_HERAxEuclid_lightcone.ipynb`, `notebooks/analysis.ipynb`, `src/conversions.py` |
-| `py21cmfast >= 4.1.1` | `21cmfast_HERAxEuclid.ipynb`, `21cmfast_HERAxEuclid_lightcone.ipynb`, `run_simulation.py` |
-| `astropy` | `21cmfast_HERAxEuclid.ipynb`, `21cmfast_HERAxEuclid_lightcone.ipynb`, `src/conversions.py` |
+| `scipy` | `21cmfast_HERAxEuclid_lightcone.ipynb`, `notebooks/analysis.ipynb`, `src/conversions.py` |
+| `py21cmfast >= 4.1.1` | `21cmfast_HERAxEuclid_lightcone.ipynb`, `run_simulation.py` |
+| `astropy` | `21cmfast_HERAxEuclid_lightcone.ipynb`, `src/conversions.py` |
 | `hmf` | `run_simulation.py`, `notebooks/analysis.ipynb` |
 | `h5py` | `run_simulation.py`, `notebooks/plot_fields.ipynb`, `notebooks/analysis.ipynb` |
 
@@ -433,19 +596,31 @@ conda activate 21cmfast
 # Analytical framework (no external dependencies beyond numpy/matplotlib)
 jupyter notebook 21cm_galaxy_cross_uncertainty.ipynb
 
-# 21cmFAST coeval simulation pipeline (requires py21cmfast >= 4.1.1)
-jupyter notebook 21cmfast_HERAxEuclid.ipynb
-
 # 21cmFAST lightcone simulation pipeline — monolithic version
 jupyter notebook 21cmfast_HERAxEuclid_lightcone.ipynb
 
 # HPC-optimised lightcone pipeline — recommended for cluster use
-sbatch submit_job.sh                                   # Part 1: run simulation
+bash submit_job.sh                                     # Part 1: run simulation
 jupyter notebook notebooks/plot_fields.ipynb           # Part 2: field plots
 jupyter notebook notebooks/analysis.ipynb              # Part 3: power spectra & SNR
 ```
 
 Run all cells sequentially. All notebooks are self-contained and generate all figures inline. The simulation notebooks cache 21cmFAST outputs to disk on first run. The HPC pipeline saves simulation outputs to `outputs/lightcone_data.h5` for independent loading by the analysis notebooks.
+
+## Testing
+
+Project convention (see `CLAUDE.md`): every function in `src/` should have at
+least one corresponding test, in `tests/test_<module>.py`. Run the suite with:
+
+```bash
+conda run -n 21cmfast pytest tests/ -v
+```
+
+> **Current status: no `tests/` directory exists yet.** The utilities in
+> `src/conversions.py` and `src/FOV_to_cMpc.py` are presently untested — the
+> round-trip identities (`Muv_to_Luv` ↔ `Luv_to_Muv`, `sfr_to_Luv` ↔
+> `Luv_to_sfr`) and the `hmf` squared-peak-height convention in
+> `sheth_tormen_bias` are the obvious first candidates.
 
 ## References
 
