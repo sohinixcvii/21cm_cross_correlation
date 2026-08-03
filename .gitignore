@@ -1,0 +1,12 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# 21cmFAST simulation cache (hash-named cache dirs written to project root)
+d1f8b93ecb5e05f9040e32ca2a1534a2/
+
+# Generated simulation outputs
+outputs/
+
+# Reference literature (local only, not part of repo)
+resources/

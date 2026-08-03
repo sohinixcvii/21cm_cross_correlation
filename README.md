@@ -14,6 +14,8 @@ This project contains three complementary notebooks plus a refactored HPC-optimi
 
 ### HPC lightcone pipeline (recommended for cluster use)
 
+See [`PIPELINE.md`](PIPELINE.md) for a succinct pipeline summary with a flowchart.
+
 The lightcone workflow has been split into three self-contained parts for efficient use on HPC clusters:
 
 | File | Purpose |

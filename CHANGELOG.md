@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **`PIPELINE.md`** — new top-level document summarising the HPC pipeline
+  (`submit_job.sh` → `run_simulation.py` → `outputs/lightcone_data.h5` →
+  `notebooks/plot_fields.ipynb` / `notebooks/analysis.ipynb`), including a
+  Mermaid flowchart, a stage table, and the HDF5 output schema.
+
 ### Fixed
 - **`notebooks/plot_fields.ipynb` — Bouwens et al. (2021) journal citation:**
   All occurrences of "ApJ 908, 24" corrected to "AJ 162, 47". The paper is
