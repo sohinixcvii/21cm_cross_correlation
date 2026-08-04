@@ -7,6 +7,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Interactive inline figures, 2026-08-04 ──────────────────────────── -->
+
+### Changed
+- **All four notebooks — interactive inline plotting and constrained layout:**
+  `21cmfast_HERAxEuclid_lightcone.ipynb`, `21cm_galaxy_cross_uncertainty.ipynb`,
+  `notebooks/plot_fields.ipynb` and `notebooks/analysis.ipynb` now begin their
+  imports cell with `%matplotlib widget` and set
+  `plt.rcParams['figure.constrained_layout.use'] = True` immediately after the
+  existing `plt.rcParams.update({...})` block. Figures are therefore
+  pan/zoomable inline, and layout is resolved by the constrained-layout engine
+  at draw time rather than per-figure.
+- **All 49 `plt.tight_layout()` calls removed** (21 lightcone, 14 uncertainty,
+  11 plot_fields, 3 analysis). Constrained layout and `tight_layout()` are
+  mutually exclusive — a `tight_layout()` call switches the figure back to the
+  tight engine and warns — so the calls are now both redundant and harmful.
+  Existing explicit `constrained_layout=True` arguments (e.g. the `GridSpec`
+  figure in `21cm_galaxy_cross_uncertainty.ipynb`) were left in place; they
+  agree with the new global default.
+
+### Added
+- **`ipympl` dependency** (0.10.0, pulling `ipywidgets` 8.1.8,
+  `jupyterlab_widgets` 3.0.16, `widgetsnbextension` 4.0.15), which provides the
+  `widget` backend. Added to `env.yml` (notebook-support block) and pinned in
+  `requirements.txt`. README gains a "Figure display" subsection under Usage
+  and an `ipympl` row in the Requirements table. Note that the widget backend
+  also needs `ipywidgets >= 8` in the front-end environment serving JupyterLab,
+  which may differ from the `21cmfast` kernel environment.
+
 <!-- ─── Notebook consolidation, 2026-08-03 ──────────────────────────────── -->
 
 ### Fixed

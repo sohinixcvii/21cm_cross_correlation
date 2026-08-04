@@ -584,6 +584,7 @@ pip install -r requirements.txt
 | `astropy` | `21cmfast_HERAxEuclid_lightcone.ipynb`, `src/conversions.py` |
 | `hmf` | `run_simulation.py`, `notebooks/analysis.ipynb` |
 | `h5py` | `run_simulation.py`, `notebooks/plot_fields.ipynb`, `notebooks/analysis.ipynb` |
+| `ipympl` | All notebooks — backs the `%matplotlib widget` interactive inline backend |
 
 The analytical notebook (`21cm_galaxy_cross_uncertainty.ipynb`) requires only `numpy` and `matplotlib`; all cosmological calculations use analytic fitting formulae (BBKS transfer function, Carroll et al. growth factor).
 
@@ -606,6 +607,27 @@ jupyter notebook notebooks/analysis.ipynb              # Part 3: power spectra &
 ```
 
 Run all cells sequentially. All notebooks are self-contained and generate all figures inline. The simulation notebooks cache 21cmFAST outputs to disk on first run. The HPC pipeline saves simulation outputs to `outputs/lightcone_data.h5` for independent loading by the analysis notebooks.
+
+### Figure display
+
+Every notebook opens its imports cell with
+
+```python
+%matplotlib widget
+plt.rcParams['figure.constrained_layout.use'] = True
+```
+
+`%matplotlib widget` (provided by `ipympl`) renders figures as interactive
+inline canvases — pan, zoom, and cursor readout without leaving the notebook —
+and requires `ipywidgets >= 8` in whichever environment serves the front end,
+not just in the kernel. If figures come up blank in JupyterLab, that front-end
+environment is the thing to check; falling back to `%matplotlib inline` gives
+static figures and is otherwise harmless.
+
+Constrained layout is enabled globally, so spacing is resolved at draw time and
+individual figures no longer call `plt.tight_layout()`. The two are mutually
+exclusive: adding a `tight_layout()` call back to a cell will disable
+constrained layout for that figure and emit a warning.
 
 ## Testing
 
