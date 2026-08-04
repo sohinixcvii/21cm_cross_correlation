@@ -1,73 +1,128 @@
 # HPC Pipeline
 
 Batch-cluster workflow for the 21 cm × Euclid galaxy cross-correlation
-lightcone simulation. Splits the expensive simulation (compute node, no
-display) from the cheap, iterable analysis (interactive Jupyter session),
-so the simulation only needs to run once per parameter set.
+lightcone simulation. `run_pipeline.py` drives the whole thing from one
+command; the expensive simulation stage is still separable, so it only runs
+once per parameter set while the cheap analysis re-runs freely.
 
 ## Flowchart
 
 ```mermaid
 flowchart TD
-    A["bash submit_job.sh\n(shell launcher)"] --> B["conda activate 21cmfast"]
-    B --> C["python run_simulation.py"]
+    A["bash submit_job.sh [args]\n(shell launcher)"] --> B["conda activate 21cmfast"]
+    B --> C["python run_pipeline.py [args]"]
 
-    subgraph P1["Part 1 — run_simulation.py (compute node)"]
-        C --> D["1. Derived quantities\nLOS geometry, node redshifts"]
-        D --> E["2. run_lightcone()\n21cmFASTv4 — brightness_temp,\ndensity, neutral_fraction, halo_sfr"]
-        E --> F["3a. determine_halo_catalog +\nperturb_halo_catalog\n(halo catalogue @ z_obs)"]
-        F --> G["3b. Galaxy overdensity field\nδ_gal = SFR/⟨SFR⟩ − 1"]
-        G --> H["4. Galaxy bias b_g\n(HMF + Sheth-Tormen, Euclid M_UV cut)"]
-        H --> I["5. Kaiser RSD\nδ_gal^s = (1+βμ²)δ_gal, β=f/b_g"]
-        I --> J["6. Write HDF5"]
+    C --> S{"--sim\nauto / force / skip"}
+    S -->|run| D["python run_simulation.py\n(subprocess)"]
+    S -->|use stored| K
+
+    subgraph P1["Stage 1 — run_simulation.py (compute node)"]
+        D --> D1["1. Derived quantities\nLOS geometry, node redshifts"]
+        D1 --> D2["2. run_lightcone()\n21cmFASTv4 — brightness_temp,\ndensity, neutral_fraction, halo_sfr"]
+        D2 --> D3["3a. determine_halo_catalog +\nperturb_halo_catalog\n(halo catalogue @ z_obs)"]
+        D3 --> D4["3b. Galaxy overdensity field\nδ_gal = SFR/⟨SFR⟩ − 1"]
+        D4 --> D5["4. Galaxy bias b_g\n(HMF + Sheth-Tormen, Euclid M_UV cut)"]
+        D5 --> D6["5. Kaiser RSD\nδ_gal^s = (1+βμ²)δ_gal, β=f/b_g"]
+        D6 --> D7["6. Write HDF5"]
     end
 
-    J --> K[("outputs/lightcone_data.h5\nfields + halo catalogue + attrs")]
-    K -.timing / CPU-hours / exit code.-> L["sendmail notification\nto sohinidutta97@gmail.com"]
+    D7 --> K[("outputs/lightcone_data.h5\nfields + halo catalogue + attrs")]
 
-    K --> M["notebooks/plot_fields.ipynb\nPart 2 — field & catalogue figures"]
-    K --> N["notebooks/analysis.ipynb\nPart 3 — power spectra + SNR"]
+    K --> L["src/dataio.load_simulation\n(optional --max-halos subsampling)"]
+
+    subgraph P2["Stage 2 — src/analysis.py"]
+        L --> M{"--analysis\nauto / force / skip"}
+        M -->|compute| N["2D cylindrical power spectra\nP_21, P_gal, P_21×gal"]
+        N --> O[("outputs/analysis_products.h5\ncached spectra")]
+        M -->|load cache| O
+        O --> P["Photo-z damping W(k_∥)\nForeground wedge mask\nHERA noise + shot noise\nPer-mode & total SNR"]
+        L --> Q["Euclid M_UV selection\nEffective galaxy bias ⟨b_g⟩"]
+    end
+
+    subgraph P3["Stage 3 — src/figures.py (Agg, headless)"]
+        P --> R["power_spectra_2d, cross_snr"]
+        Q --> T["galaxy_bias"]
+        L --> U["lightcone_fields, lightcone_slice,\nhalo_catalogue, sfr_relations,\nuv_luminosity_function,\nstellar_mass_muv, main_sequence"]
+    end
+
+    R --> V[("outputs/figures/*.png")]
+    T --> V
+    U --> V
+
+    P --> W[("outputs/pipeline_summary.json\n⟨x_HI⟩, wedge slopes, σ_r,\ntotal SNR, ⟨b_g⟩")]
+    Q --> W
+
+    W -.timing / CPU-hours / exit code.-> X["sendmail notification\nto sohinidutta97@gmail.com"]
+
+    K --> Y["notebooks/plot_fields.ipynb\nnotebooks/analysis.ipynb\n(interactive, same results)"]
 
     style A fill:#2b6cb0,color:#fff
+    style C fill:#2b6cb0,color:#fff
     style K fill:#b7791f,color:#fff
-    style M fill:#2f855a,color:#fff
-    style N fill:#2f855a,color:#fff
+    style O fill:#b7791f,color:#fff
+    style V fill:#2f855a,color:#fff
+    style W fill:#2f855a,color:#fff
+    style Y fill:#4a5568,color:#fff
 ```
 
 ## Stages
 
 | # | Stage | Where it runs | Input | Output |
 |---|-------|----------------|-------|--------|
-| 1 | `submit_job.sh` — shell launcher: activates `21cmfast` conda env, times the run, emails a completion/failure report via `sendmail` | HPC login/compute node | — | `outputs/<job>_<timestamp>.log` |
-| 2 | `run_simulation.py` — **Part 1**: 21cmFASTv4 lightcone, halo catalogue, galaxy field, bias estimate, Kaiser RSD | HPC compute node (headless, `matplotlib.use("Agg")`) | Config block at top of script | `outputs/lightcone_data.h5` |
-| 3 | `notebooks/plot_fields.ipynb` — **Part 2**: diagnostic and literature-comparison figures | Local machine or interactive HPC Jupyter session | `lightcone_data.h5` | Inline figures |
-| 4 | `notebooks/analysis.ipynb` — **Part 3**: 2D cylindrical power spectra, photo-z damping, foreground wedge excision, SNR | Local machine or interactive HPC Jupyter session | `lightcone_data.h5` | Inline figures + SNR summary |
+| 0 | `submit_job.sh` — shell launcher: activates `21cmfast`, times the run, forwards its arguments to `run_pipeline.py`, emails a report via `sendmail` | HPC login/compute node | CLI arguments | `outputs/<job>_<timestamp>.log` |
+| 1 | `run_simulation.py` — 21cmFASTv4 lightcone, halo catalogue, galaxy field, bias estimate, Kaiser RSD. Invoked as a subprocess when `--sim` says so | HPC compute node (headless, `matplotlib.use("Agg")`) | Config block at top of script | `outputs/lightcone_data.h5` |
+| 2 | `src/analysis.py` — cylindrical power spectra, photo-$z$ damping, wedge excision, HERA noise, SNR, Euclid selection, effective bias | Anywhere | `lightcone_data.h5` | `outputs/analysis_products.h5` |
+| 3 | `src/figures.py` — all 10 figures, `Agg` backend | Anywhere | Loaded data + spectra | `outputs/figures/*.png` |
+| 4 | `run_pipeline.py` summary | Anywhere | All of the above | `outputs/pipeline_summary.json` + console report |
+| — | `notebooks/plot_fields.ipynb`, `notebooks/analysis.ipynb` | Local machine or interactive HPC Jupyter session | `lightcone_data.h5` | Inline figures (same content, interactive) |
 
-Parts 2 and 3 never touch 21cmFAST or re-run the simulation — they only read
-the HDF5 file, so they are fast to re-run after tweaking a plot.
+Stages 2–4 never touch 21cmFAST — they only read the HDF5 file, so they are
+fast to re-run after tweaking a plot.
 
 ## Why split like this
 
 - **Cost isolation**: the 21cmFAST run is the only step that needs cluster
   CPU/wall-time; plotting and power-spectrum math are cheap and iterate
-  quickly without resubmitting a job.
+  quickly without resubmitting a job. `--sim auto` (the default) never
+  re-runs it by accident.
 - **Reproducibility**: all scalar parameters (grid, cosmology, survey cuts,
-  RSD inputs) are stored as HDF5 attributes alongside the fields, so Parts 2–3
-  are fully self-contained given only the `.h5` file.
-- **Headless-safe**: `run_simulation.py` forces the `Agg` matplotlib backend
-  so it can run under SLURM with no display.
+  RSD inputs) are stored as HDF5 attributes alongside the fields, so stages
+  2–4 are fully self-contained given only the `.h5` file.
+- **Headless-safe**: both `run_simulation.py` and `src/figures.py` force the
+  `Agg` matplotlib backend, so the pipeline runs under SLURM with no display.
+- **Two front-ends, one implementation**: the notebooks remain for interactive
+  work, but the science code they used to inline now lives in `src/`, is
+  tested, and is what the batch pipeline runs.
 
 ## Running it
 
 ```bash
-# On the cluster
-bash submit_job.sh                            # Part 1 — writes outputs/lightcone_data.h5
-                                                # (emails sohinidutta97@gmail.com on completion/failure)
+# Everything, one command (simulation runs only if the HDF5 is missing)
+python run_pipeline.py
 
-# Locally, or in an interactive HPC Jupyter session
-jupyter notebook notebooks/plot_fields.ipynb   # Part 2 — field plots
-jupyter notebook notebooks/analysis.ipynb      # Part 3 — power spectra & SNR
+# On the cluster, with timing + email notification
+bash submit_job.sh --sim force        # force a fresh 21cmFAST run
+bash submit_job.sh                    # analyse stored results and re-plot
+
+# Useful variants
+python run_pipeline.py --analysis force        # recompute the power spectra
+python run_pipeline.py --plots power snr       # only the k-space figures
+python run_pipeline.py --plots none            # numbers only, no figures
+python run_pipeline.py --max-halos 5000000     # cap catalogue memory
+python run_pipeline.py --format pdf --dpi 300  # publication-ready output
+python run_pipeline.py --help                  # full option list
+
+# Interactive exploration of the same results
+jupyter notebook notebooks/plot_fields.ipynb
+jupyter notebook notebooks/analysis.ipynb
 ```
+
+### Stage control
+
+| Flag | `auto` (default) | `force` | `skip` |
+|------|------------------|---------|--------|
+| `--sim` | run `run_simulation.py` only if `outputs/lightcone_data.h5` is missing | always re-run it | never run it; error if there is no stored output |
+| `--analysis` | recompute the power spectra only if the cache is missing or older than the simulation | always recompute | load the cache; error if absent |
 
 All commands must run inside the `21cmfast` conda environment
 (`conda activate 21cmfast`, or `conda run -n 21cmfast <command>`).
@@ -78,14 +133,37 @@ All commands must run inside the `21cmfast` conda environment
 > directives your cluster requires (`--partition`, `--time`, `--account`,
 > `--cpus-per-task`, …) at the top of the script first.
 
-## `outputs/lightcone_data.h5` contents
+## Outputs
+
+### `outputs/lightcone_data.h5` (Stage 1)
 
 | Dataset / attrs | Description |
 |---|---|
 | `brightness_temp_field`, `density_field`, `neutral_fraction`, `galaxy_overdensity` | `(HII_DIM, HII_DIM, N_z)` lightcone fields (gzip-compressed) |
 | `lc_redshifts`, `lc_dist_Mpc` | Per-slice redshift and comoving distance |
-| `halo_catalog/{halo_masses, halo_coords, stellar_masses, sfr}` | Per-halo catalogue at `z_obs` |
+| `halo_catalog/{halo_masses, halo_coords, stellar_masses, sfr}` | Per-halo catalogue at `z_obs` (SFR in M☉ yr⁻¹) |
 | root attrs | Grid/box config, redshift range, galaxy bias, β_rsd, Euclid survey params, cosmology, HERA instrument params, wedge/binning settings |
+
+### `outputs/analysis_products.h5` (Stage 2)
+
+| Dataset / attrs | Description |
+|---|---|
+| `k_perp`, `k_parallel` | Log-spaced bin centres [Mpc⁻¹] |
+| `P_21cm_auto`, `P_galaxy_auto`, `P_cross` | 2D cylindrical spectra on that grid |
+| `mode_counts` | Fourier modes averaged per bin |
+| root attrs | `source_path`, `source_mtime` — used to detect a stale cache |
+
+### `outputs/figures/` (Stage 3)
+
+`lightcone_fields`, `lightcone_slice`, `halo_catalogue`, `sfr_relations`,
+`uv_luminosity_function`, `stellar_mass_muv`, `main_sequence`,
+`power_spectra_2d`, `cross_snr`, `galaxy_bias`.
+
+### `outputs/pipeline_summary.json` (Stage 4)
+
+Simulation geometry, ⟨x_HI⟩, the large-scale cross-spectrum sign, photo-$z$
+smearing σ_r, both wedge slopes, the fraction of modes outside the wedge,
+noise levels, the total SNR, the Euclid selection counts, and ⟨b_g⟩.
 
 See `README.md` for the full science background and equation references, and
 `docs/project_update.md` for the latest run's numerical results.

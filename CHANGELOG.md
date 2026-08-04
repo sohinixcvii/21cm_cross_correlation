@@ -7,6 +7,83 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Full-pipeline driver, 2026-08-04 ────────────────────────────────── -->
+
+### Added
+- **`run_pipeline.py` — end-to-end pipeline driver.** One command now runs the
+  whole workflow: an optional 21cmFAST simulation, the complete analysis
+  (either fresh or from stored results), all figures, and a JSON summary.
+  Previously `submit_job.sh` ran only `run_simulation.py`, and everything
+  downstream lived in notebook cells that had to be executed by hand.
+  Each stage is independently controllable:
+  - `--sim {auto,force,skip}` — `auto` (default) invokes `run_simulation.py`
+    as a subprocess only when `outputs/lightcone_data.h5` is missing, so an
+    expensive 21cmFAST run can never be triggered by accident.
+  - `--analysis {auto,force,skip}` — `auto` recomputes the power spectra only
+    when the cache is missing or older than the simulation file (mtime
+    comparison against the `source_mtime` attribute).
+  - `--plots` selects among the groups `fields`, `halos`, `scaling`, `power`,
+    `snr`, `bias` (or `all`/`none`); plus `--format`, `--dpi`, `--data`,
+    `--products`, `--figdir`, `--summary`, `--max-halos`, `--m-uv-bright`,
+    `--sim-script`, `--quiet`.
+- **`src/analysis.py` — the Part 3 science, extracted from
+  `notebooks/analysis.ipynb`.** `compute_cylindrical_cross_power`,
+  `compute_all_power_spectra`, `horizon_wedge_slope`, `fov_wedge_slope`,
+  `foreground_wedge_mask`, `radial_smearing_length`, `photoz_damping_kernel`,
+  `hera_thermal_noise_power`, `cross_power_snr`, `total_snr`,
+  `euclid_sfr_window`, `select_euclid_halos`, `effective_galaxy_bias`, plus
+  the `EuclidSelection`, `BiasEstimate`, and `SNRResult` containers. Imports
+  neither matplotlib nor py21cmfast.
+  - The notebook computed the horizon slope twice from two different-looking
+    expressions (cells 8 and 18). They are algebraically identical — the
+    λ·f₂₁ factors cancel to `D_c H / [c(1+z)]` — so this is now one function.
+- **`src/figures.py` — all 10 figures from both notebooks**, as functions
+  returning a `Figure`. Forces the `Agg` backend on import, so figure
+  generation is safe on a headless compute node. Includes the shared helpers
+  `apply_plot_style`, `save_figure`, `fill_nan_nearest`, `eor_colormap`, and
+  a `_binned_median` used by both percentile-band plots.
+- **`src/dataio.py` — HDF5 I/O and caching.** `load_simulation` returns a
+  typed `SimulationData` with accessors for the scalar metadata, and supports
+  `max_halos` (uniform strided subsampling; the resulting
+  `halo_sampling_factor` rescales the UVLF normalisation so number densities
+  stay correct) and `load_halos=False` / `load_fields=False` for partial
+  loads. `save_power_spectra` / `load_power_spectra` / `products_are_stale`
+  back the `outputs/analysis_products.h5` cache.
+- **`tests/` — 64 tests, the project's first suite.** `conftest.py` writes a
+  synthetic `lightcone_data.h5` with the production schema (16² × 12 cells,
+  4 000 halos), so nothing in the suite needs 21cmFAST and the whole run
+  takes ~20 s. Covers the analysis functions (including the analytic
+  white-noise normalisation $P = \sigma^2 V_\mathrm{cell}$ and the
+  cross-spectrum sign), the I/O and cache-staleness logic, every figure
+  function, and the pipeline's stage control end to end (with a stub
+  simulation script standing in for 21cmFAST).
+- **`outputs/analysis_products.h5` and `outputs/pipeline_summary.json`** as
+  new pipeline products. The summary records ⟨x_HI⟩, the large-scale
+  cross-spectrum sign, σ_r, both wedge slopes, noise levels, the total SNR,
+  the Euclid selection counts, and ⟨b_g⟩.
+
+### Changed
+- **`submit_job.sh` now launches `run_pipeline.py` rather than
+  `run_simulation.py`**, and forwards all of its arguments verbatim
+  (`bash submit_job.sh --sim force`). The timing, CPU-hour accounting, and
+  `sendmail` notification are unchanged; the email now also lists the figures
+  written and points at the summary JSON. `JOB_NAME`, `CONDA_ENV`, and
+  `PYTHON_SCRIPT` are overridable from the environment, so
+  `PYTHON_SCRIPT=run_simulation.py bash submit_job.sh` restores the old
+  simulation-only behaviour.
+- **`README.md` and `PIPELINE.md`** document the driver, the stage-control
+  flags, the new outputs, and the expanded flowchart. The README's Testing
+  section no longer says "no `tests/` directory exists yet".
+
+### Notes
+- Verified against the stored fiducial run (128² × 100 cells, 114 M halos,
+  2.76 GB HDF5): 34.5 s end to end with the simulation skipped, reproducing
+  the notebook results — ⟨x_HI⟩ = 0.176, anti-correlated large-scale
+  cross-spectrum, 26.2 % of modes outside the wedge, total SNR = 0.1 σ,
+  ⟨b_g⟩ = 4.74 from 49 315 Euclid-selected halos.
+- The halo catalogue is loaded only when a requested figure or the bias stage
+  needs it, so `--plots power snr` skips 2.7 GB of reads entirely.
+
 <!-- ─── Interactive inline figures, 2026-08-04 ──────────────────────────── -->
 
 ### Changed

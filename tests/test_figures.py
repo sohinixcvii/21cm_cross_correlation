@@ -1,0 +1,235 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""Tests for ``src/figures.py``.
+
+Every plotting function is exercised on the synthetic simulation: it must
+build a figure and write a non-empty file without touching a display.
+"""
+
+from __future__ import annotations
+
+import os
+
+import matplotlib
+import numpy as np
+import pytest
+from matplotlib.figure import Figure
+
+from src import analysis, figures
+from src.dataio import SimulationData
+
+
+@pytest.fixture(scope="module")
+def spectra(tiny_sim: SimulationData):
+    """Power spectra of the synthetic simulation."""
+    return analysis.compute_all_power_spectra(
+        tiny_sim.brightness_temp_field,
+        tiny_sim.galaxy_overdensity,
+        box_len_perp=tiny_sim.BOX_LEN,
+        box_len_los=tiny_sim.L_los,
+        n_bins_perp=8,
+        n_bins_parallel=8,
+    )
+
+
+@pytest.fixture(scope="module")
+def wedge_slopes(tiny_sim: SimulationData):
+    """Horizon and FoV wedge slopes at the reference redshift."""
+    return (
+        analysis.horizon_wedge_slope(tiny_sim.z_obs),
+        analysis.fov_wedge_slope(tiny_sim.z_obs),
+    )
+
+
+def assert_saves(fig: Figure, tmp_path, name: str) -> None:
+    """
+    Assert that a figure is a real Figure and writes a non-empty file.
+
+    Parameters
+    ----------
+    fig : Figure
+        Figure under test.
+    tmp_path : pathlib.Path
+        pytest temporary directory.
+    name : str
+        Base filename.
+    """
+    assert isinstance(fig, Figure)
+    path = figures.save_figure(fig, str(tmp_path), name)
+    assert os.path.exists(path)
+    assert os.path.getsize(path) > 1000
+
+
+# ===========================================================================
+#  Helpers
+# ===========================================================================
+
+def test_backend_is_headless() -> None:
+    """Importing the module must force a non-interactive backend."""
+    assert matplotlib.get_backend().lower() == "agg"
+
+
+def test_apply_plot_style_sets_dpi() -> None:
+    """The style helper propagates the requested DPI to rcParams."""
+    figures.apply_plot_style(dpi=123)
+    assert matplotlib.rcParams["figure.dpi"] == 123
+    assert matplotlib.rcParams["savefig.dpi"] == 123
+    figures.apply_plot_style()
+
+
+def test_fill_nan_nearest_fills_holes() -> None:
+    """Isolated NaNs are replaced by the neighbourhood mean."""
+    arr = np.arange(9, dtype=float).reshape(3, 3)
+    arr[1, 1] = np.nan
+
+    filled = figures.fill_nan_nearest(arr)
+
+    assert not np.isnan(filled).any()
+    assert filled[0, 0] == 0.0
+
+
+def test_fill_nan_nearest_passes_through_clean_and_all_nan_arrays() -> None:
+    """No NaNs, or all NaNs, both return the input unchanged."""
+    clean = np.ones((3, 3))
+    np.testing.assert_array_equal(figures.fill_nan_nearest(clean), clean)
+
+    all_nan = np.full((3, 3), np.nan)
+    assert np.isnan(figures.fill_nan_nearest(all_nan)).all()
+
+
+def test_eor_colormap_endpoints() -> None:
+    """The EoR colormap runs from near-black to near-white."""
+    cmap = figures.eor_colormap()
+    assert cmap.name == "EoR21"
+    assert sum(cmap(0.0)[:3]) < 0.5
+    assert sum(cmap(1.0)[:3]) > 2.5
+
+
+def test_save_figure_creates_directory(tmp_path) -> None:
+    """A missing output directory is created rather than raising."""
+    fig = Figure()
+    fig.add_subplot(111).plot([0, 1], [0, 1])
+
+    target = tmp_path / "nested" / "figures"
+    path = figures.save_figure(fig, str(target), "line", fmt="pdf")
+
+    assert path.endswith("line.pdf")
+    assert os.path.exists(path)
+
+
+# ===========================================================================
+#  Part 2 figures
+# ===========================================================================
+
+def test_plot_lightcone_fields(tiny_sim: SimulationData, tmp_path) -> None:
+    """The three-panel field figure renders and saves."""
+    assert_saves(figures.plot_lightcone_fields(tiny_sim), tmp_path, "fields")
+
+
+def test_plot_lightcone_slice(tiny_sim: SimulationData, tmp_path) -> None:
+    """The wide EoR lightcone slice renders and saves."""
+    assert_saves(figures.plot_lightcone_slice(tiny_sim), tmp_path, "slice")
+
+
+def test_plot_halo_catalogue(tiny_sim: SimulationData, tmp_path) -> None:
+    """The halo catalogue overview renders and saves."""
+    assert_saves(figures.plot_halo_catalogue(tiny_sim), tmp_path, "halos")
+
+
+def test_plot_sfr_relations(tiny_sim: SimulationData, tmp_path) -> None:
+    """The SFR scaling-relation panels render and save."""
+    assert_saves(figures.plot_sfr_relations(tiny_sim), tmp_path, "sfr")
+
+
+def test_plot_uv_luminosity_function(tiny_sim: SimulationData, tmp_path) -> None:
+    """The UVLF figure renders and saves."""
+    assert_saves(figures.plot_uv_luminosity_function(tiny_sim), tmp_path, "uvlf")
+
+
+def test_plot_stellar_mass_muv(tiny_sim: SimulationData, tmp_path) -> None:
+    """The stellar-mass–magnitude figure renders and saves."""
+    assert_saves(figures.plot_stellar_mass_muv(tiny_sim), tmp_path, "smuv")
+
+
+def test_plot_main_sequence(tiny_sim: SimulationData, tmp_path) -> None:
+    """The star-forming main-sequence figure renders and saves."""
+    pytest.importorskip("astropy")
+    assert_saves(figures.plot_main_sequence(tiny_sim), tmp_path, "ms")
+
+
+def test_uvlf_rescales_subsampled_catalogues(tiny_sim: SimulationData) -> None:
+    """Subsampling must not shift the luminosity-function normalisation."""
+    import copy
+
+    subsampled = copy.copy(tiny_sim)
+    subsampled.sfr = tiny_sim.sfr[::4]
+    subsampled.stellar_masses = tiny_sim.stellar_masses[::4]
+    subsampled.halo_masses = tiny_sim.halo_masses[::4]
+    subsampled.halo_coords = tiny_sim.halo_coords[::4]
+    subsampled.halo_sampling_factor = 4.0
+
+    full_fig = figures.plot_uv_luminosity_function(tiny_sim)
+    sub_fig = figures.plot_uv_luminosity_function(subsampled)
+
+    full_points = full_fig.axes[0].collections
+    sub_points = sub_fig.axes[0].collections
+    assert len(full_points) == len(sub_points)
+
+    # The plotted data points (errorbar markers) carry the normalisation.
+    full_y = full_fig.axes[0].lines[2].get_ydata()
+    sub_y = sub_fig.axes[0].lines[2].get_ydata()
+    overlap = min(len(full_y), len(sub_y))
+    assert overlap > 0
+    ratio = np.nanmedian(sub_y[:overlap] / full_y[:overlap])
+    assert 0.5 < ratio < 2.0
+
+
+# ===========================================================================
+#  Part 3 figures
+# ===========================================================================
+
+def test_plot_power_spectra(tiny_sim: SimulationData, spectra, wedge_slopes, tmp_path) -> None:
+    """The 2D power-spectrum panels render and save."""
+    horizon, fov = wedge_slopes
+    fig = figures.plot_power_spectra(spectra, tiny_sim, horizon, fov)
+    assert_saves(fig, tmp_path, "power")
+
+
+def test_plot_snr(tiny_sim: SimulationData, spectra, wedge_slopes, tmp_path) -> None:
+    """The SNR figure renders and saves."""
+    horizon, fov = wedge_slopes
+
+    smearing = analysis.radial_smearing_length(
+        tiny_sim.get("photoz_uncertainty"), tiny_sim.z_obs
+    )
+    kernel = analysis.photoz_damping_kernel(spectra.k_parallel, smearing)
+    p_cross_observed = spectra.P_cross * kernel
+
+    snr = analysis.cross_power_snr(
+        P_cross_observed=p_cross_observed,
+        P_21cm_auto=spectra.P_21cm_auto,
+        P_galaxy_observed=spectra.P_galaxy_auto * kernel ** 2,
+        P_noise_21cm=analysis.hera_thermal_noise_power(tiny_sim.z_obs, 3.6e6, 8e6),
+        P_noise_galaxy=1.0 / tiny_sim.get("mean_galaxy_density"),
+        outside_wedge=analysis.foreground_wedge_mask(
+            spectra.k_perp, spectra.k_parallel, horizon, 0.02
+        ),
+    )
+
+    fig = figures.plot_snr(spectra, snr, p_cross_observed, tiny_sim, horizon, fov)
+    assert_saves(fig, tmp_path, "snr")
+
+
+def test_plot_bias_diagnostic(tiny_sim: SimulationData, tmp_path) -> None:
+    """The bias diagnostic renders and saves."""
+    pytest.importorskip("hmf")
+
+    selection = analysis.select_euclid_halos(
+        tiny_sim.sfr, tiny_sim.halo_masses,
+        M_UV_faint=tiny_sim.get("M_UV_limit"), M_UV_bright=-22.0,
+    )
+    if selection.n_selected == 0:
+        pytest.skip("no synthetic halos in the Euclid window")
+
+    bias = analysis.effective_galaxy_bias(selection, z_obs=tiny_sim.z_obs)
+    assert_saves(figures.plot_bias_diagnostic(bias, tiny_sim.z_obs), tmp_path, "bias")

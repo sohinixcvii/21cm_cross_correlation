@@ -16,31 +16,64 @@ This project contains two active notebooks plus a refactored HPC-optimised light
 
 See [`PIPELINE.md`](PIPELINE.md) for a succinct pipeline summary with a flowchart.
 
-The lightcone workflow has been split into three self-contained parts for efficient use on HPC clusters:
+The lightcone workflow has been split into self-contained parts for efficient use on HPC clusters, with `run_pipeline.py` driving all of them from one command:
 
 | File | Purpose |
 |------|---------|
+| `run_pipeline.py` | **Driver** — runs the whole workflow: optional simulation, full analysis (fresh or from stored results), all figures, and a JSON summary |
 | `run_simulation.py` | **Part 1** — runs the 21cmFAST lightcone, constructs the galaxy field, estimates galaxy bias, applies Kaiser RSD, and saves all outputs to `outputs/lightcone_data.h5` |
-| `notebooks/plot_fields.ipynb` | **Part 2** — loads the HDF5 output and visualises the simulated fields (halo catalogue, SFR distributions, lightcone slices, EoR brightness temperature plot) |
-| `notebooks/analysis.ipynb` | **Part 3** — loads the HDF5 output and performs all post-simulation calculations: 2D cylindrical power spectra, photo-$z$ damping, foreground wedge excision, SNR estimation, Euclid magnitude/SFR cuts, and effective galaxy bias from the halo catalogue |
-| `submit_job.sh` | Launcher for Part 1 — activates the conda env, times the run, and emails a completion/failure report via `sendmail` |
+| `src/analysis.py` | **Part 3 computation** — cylindrical power spectra, wedge geometry, photo-$z$ damping, HERA noise, SNR, Euclid selection, effective galaxy bias |
+| `src/figures.py` | **Parts 2–3 figures** — every plot from the two notebooks, headless (`Agg`) and written to `outputs/figures/` |
+| `src/dataio.py` | HDF5 loading, halo-catalogue subsampling, and the analysis-product cache |
+| `notebooks/plot_fields.ipynb` | **Part 2** — the same field visualisations, interactively (halo catalogue, SFR distributions, lightcone slices, EoR brightness temperature plot) |
+| `notebooks/analysis.ipynb` | **Part 3** — the same post-simulation calculations, interactively: 2D cylindrical power spectra, photo-$z$ damping, foreground wedge excision, SNR estimation, Euclid magnitude/SFR cuts, and effective galaxy bias |
+| `submit_job.sh` | Launcher for `run_pipeline.py` — activates the conda env, times the run, forwards its arguments, and emails a completion/failure report via `sendmail` |
 
 **Workflow:**
 
 ```bash
-# On the HPC cluster — run the simulation
-bash submit_job.sh
+# One command for everything — simulation runs only if the HDF5 is missing
+python run_pipeline.py
 
-# Locally (or in a Jupyter session on the cluster) — visualise and analyse
+# On the HPC cluster, with timing + email notification
+bash submit_job.sh --sim force      # force a fresh 21cmFAST run
+bash submit_job.sh                  # analyse stored results and re-plot
+
+# Notebooks remain available for interactive exploration
 jupyter notebook notebooks/plot_fields.ipynb   # Part 2: field plots
 jupyter notebook notebooks/analysis.ipynb      # Part 3: power spectra & SNR
 ```
+
+**Stage control.** Each stage runs fresh or from stored results, so the
+expensive 21cmFAST run happens only when it must:
+
+| Flag | `auto` (default) | `force` | `skip` |
+|------|------------------|---------|--------|
+| `--sim` | run only if `outputs/lightcone_data.h5` is missing | always re-run `run_simulation.py` | never run; error if there is no stored output |
+| `--analysis` | recompute the power spectra only if the cache is missing or older than the simulation | always recompute | load `outputs/analysis_products.h5`; error if absent |
+
+Other options: `--plots {all,none,fields,halos,scaling,power,snr,bias}`,
+`--format {png,pdf,svg}`, `--dpi`, `--max-halos N` (uniform strided
+subsampling of the halo catalogue when memory is tight — number densities are
+rescaled automatically), `--data`, `--products`, `--figdir`, `--summary`.
+Run `python run_pipeline.py --help` for the full list.
+
+**Outputs:**
+
+| Path | Contents |
+|------|----------|
+| `outputs/lightcone_data.h5` | Simulation fields, halo catalogue, and metadata (Part 1) |
+| `outputs/analysis_products.h5` | Cached $P_{21}$, $P_\mathrm{gal}$, $P_{21\times\mathrm{gal}}$ and the $k$-grid |
+| `outputs/figures/*.png` | 10 figures: `lightcone_fields`, `lightcone_slice`, `halo_catalogue`, `sfr_relations`, `uv_luminosity_function`, `stellar_mass_muv`, `main_sequence`, `power_spectra_2d`, `cross_snr`, `galaxy_bias` |
+| `outputs/pipeline_summary.json` | Scalar results: $\langle x_\mathrm{HI}\rangle$, wedge slopes, $\sigma_r$, total SNR, $\langle b_g\rangle$, selection counts |
 
 > **Note:** `submit_job.sh` is a plain shell wrapper — it contains no `#SBATCH`
 > directives, so it runs in the foreground on whatever node invokes it. To
 > submit it through SLURM with `sbatch`, add the appropriate `#SBATCH`
 > directives (`--partition`, `--time`, `--account`, `--cpus-per-task`, …) for
-> your cluster at the top of the script first.
+> your cluster at the top of the script first. All arguments passed to
+> `submit_job.sh` are forwarded verbatim to `run_pipeline.py`; setting
+> `PYTHON_SCRIPT=run_simulation.py` restores its old simulation-only behaviour.
 
 The HDF5 file `outputs/lightcone_data.h5` stores all simulation fields (compressed with gzip) and scalar metadata as attributes, so Parts 2 and 3 are completely independent of the simulation run.
 
@@ -57,14 +90,24 @@ The HDF5 file `outputs/lightcone_data.h5` stores all simulation fields (compress
 21cm_cross_correlation/
 ├── 21cm_galaxy_cross_uncertainty.ipynb    # Notebook 1 — analytical framework
 ├── 21cmfast_HERAxEuclid_lightcone.ipynb   # Notebook 3 — monolithic lightcone
+├── run_pipeline.py                        # Pipeline driver — sim + analysis + figures
 ├── run_simulation.py                      # HPC pipeline Part 1 — simulation
 ├── submit_job.sh                          # Launcher + email notification
 ├── notebooks/
 │   ├── plot_fields.ipynb                  # Part 2 — field & catalogue figures
 │   └── analysis.ipynb                     # Part 3 — power spectra & SNR
 ├── src/
+│   ├── analysis.py                        # Power spectra, wedge, noise, SNR, bias
+│   ├── figures.py                         # All pipeline figures (headless)
+│   ├── dataio.py                          # HDF5 loading + analysis-product cache
 │   ├── conversions.py                     # Cosmological conversion utilities
 │   └── FOV_to_cMpc.py                     # Survey geometry CLI
+├── tests/                                 # pytest suite for src/ and the pipeline
+│   ├── conftest.py                        # Synthetic lightcone fixtures
+│   ├── test_analysis.py
+│   ├── test_dataio.py
+│   ├── test_figures.py
+│   └── test_pipeline.py
 ├── docs/                                  # Reference & methodology notes
 ├── _archive/
 │   └── 21cmfast_HERAxEuclid.ipynb         # Notebook 2 — coeval (superseded)
@@ -601,10 +644,23 @@ jupyter notebook 21cm_galaxy_cross_uncertainty.ipynb
 jupyter notebook 21cmfast_HERAxEuclid_lightcone.ipynb
 
 # HPC-optimised lightcone pipeline — recommended for cluster use
-bash submit_job.sh                                     # Part 1: run simulation
+python run_pipeline.py                                 # everything, one command
+python run_pipeline.py --sim force                     # re-run the simulation first
+python run_pipeline.py --plots power snr               # only the k-space figures
+python run_pipeline.py --max-halos 5000000             # cap catalogue memory
+bash submit_job.sh --sim force                         # same, with timing + email
+
+# Interactive exploration of the same results
 jupyter notebook notebooks/plot_fields.ipynb           # Part 2: field plots
 jupyter notebook notebooks/analysis.ipynb              # Part 3: power spectra & SNR
 ```
+
+A full run on the fiducial $128^2 \times 100$ lightcone (114 M halos, 2.8 GB
+HDF5) takes ~35 s on a laptop when the simulation itself is skipped: ~1 s for
+the three power spectra, the rest dominated by reading the halo catalogue and
+rendering the catalogue-based figures. Use `--plots power snr` to skip the
+catalogue entirely (it is not loaded when no figure needs it), or
+`--max-halos` to cap the memory footprint.
 
 Run all cells sequentially. All notebooks are self-contained and generate all figures inline. The simulation notebooks cache 21cmFAST outputs to disk on first run. The HPC pipeline saves simulation outputs to `outputs/lightcone_data.h5` for independent loading by the analysis notebooks.
 
@@ -638,11 +694,21 @@ least one corresponding test, in `tests/test_<module>.py`. Run the suite with:
 conda run -n 21cmfast pytest tests/ -v
 ```
 
-> **Current status: no `tests/` directory exists yet.** The utilities in
-> `src/conversions.py` and `src/FOV_to_cMpc.py` are presently untested — the
-> round-trip identities (`Muv_to_Luv` ↔ `Luv_to_Muv`, `sfr_to_Luv` ↔
-> `Luv_to_sfr`) and the `hmf` squared-peak-height convention in
-> `sheth_tormen_bias` are the obvious first candidates.
+**Current status: 64 tests, all passing in ~20 s.** No test invokes 21cmFAST —
+`tests/conftest.py` writes a synthetic `lightcone_data.h5` with the same schema
+(16² × 12 cells, 4 000 halos), so the whole suite runs offline.
+
+| File | Covers |
+|------|--------|
+| `test_analysis.py` | Cosmology helpers, the cylindrical power-spectrum estimator (shapes, symmetry, sign, and the analytic white-noise normalisation $P = \sigma^2 V_\mathrm{cell}$), wedge geometry, photo-$z$ kernel, thermal noise, SNR, Euclid selection, effective bias |
+| `test_dataio.py` | HDF5 loading, metadata accessors, halo subsampling, field/catalogue skipping, product-cache round trip and staleness detection |
+| `test_figures.py` | Headless backend, NaN filling, colormap, and that every one of the 10 figure functions renders and writes a non-empty file |
+| `test_pipeline.py` | CLI parsing, each stage's `auto`/`force`/`skip` behaviour (with a stub simulation script), and end-to-end runs checking figures, cache reuse, and the summary JSON |
+
+> `src/conversions.py` and `src/FOV_to_cMpc.py` are still untested directly,
+> though the conversion round-trips are exercised indirectly through the
+> selection and UVLF tests. The remaining first candidates are the explicit
+> identities `Muv_to_Luv` ↔ `Luv_to_Muv` and `sfr_to_Luv` ↔ `Luv_to_sfr`.
 
 ## References
 

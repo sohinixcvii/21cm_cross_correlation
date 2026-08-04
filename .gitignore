@@ -10,3 +10,6 @@ outputs/
 
 # Reference literature (local only, not part of repo)
 resources/
+
+# Editor settings (local only)
+.vscode/
