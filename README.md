@@ -126,6 +126,7 @@ The HDF5 file `outputs/lightcone_data.h5` stores all simulation fields (compress
 |----------|----------|
 | [`PIPELINE.md`](PIPELINE.md) | HPC pipeline summary, Mermaid flowchart, stage table, and the `lightcone_data.h5` schema |
 | [`CHANGELOG.md`](CHANGELOG.md) | Chronological record of all changes, including corrected literature values |
+| [`TODO.md`](TODO.md) | Outstanding work, priority-ordered — **including the lightcone power-spectrum corrections the Δz = 1.0 range now requires** |
 | [`docs/INSTALL_21cmFASTv4.md`](docs/INSTALL_21cmFASTv4.md) | Step-by-step 21cmFAST v4.1.1 install on CSD3/HPC, plus fixes for quota, conda-plugin, and FFTW linking failures |
 | [`docs/Galaxy_bias_formalism.md`](docs/Galaxy_bias_formalism.md) | Methodology for the effective linear galaxy bias from a 21cmFAST halo catalogue under a Euclid $M_\mathrm{UV}$ cut |
 | [`docs/halo_catalogue_reference.md`](docs/halo_catalogue_reference.md) | Field-by-field reference for the v4 halo catalogue, verified against py21cmfast v4.x |
@@ -318,28 +319,57 @@ A refactored version of notebook 3 split into three independent parts for cluste
 | `HII_DIM` | 128 | Simulation grid cells per side |
 | `BOX_LEN` | 256 Mpc | Transverse box size |
 | `DIM` | `3 × HII_DIM` = 384 | High-res grid for initial conditions |
-| $z_\mathrm{min}$, $z_\mathrm{max}$ | **6.995, 7.005** | Lightcone redshift range — see the thin-slab note below |
+| $z_\mathrm{min}$, $z_\mathrm{max}$ | **6.995, 7.005** | Lightcone redshift range — smoke-test slab, see the note below |
 | $z_\mathrm{obs}$ | 7.0 | Reference redshift (midpoint) |
 | `minimum_los_slices` | 100 | Floor on $N_z$, overriding the cell-size-matched value |
-| $M_\mathrm{UV}$ limit | $< -18$ | Euclid galaxy selection |
+| $M_\mathrm{UV}$ limit | $< -18$ | Euclid galaxy selection (bright end $-22$) |
 | $\sigma_z$ | 0.059 | Euclid photo-$z$ uncertainty |
 | $\bar{n}_\mathrm{gal}$ | $3\times10^{-3}\ h^3\ \mathrm{Mpc}^{-3}$ | Mean galaxy number density |
-| $b_\mathrm{gal}$ | 8 | Fallback; overwritten by the HMF estimate when `hmf` is available |
+| $b_\mathrm{gal}$ | 8 | Fallback only; overwritten by the halo-catalogue estimate ($\approx 4.7$) |
+| $t_\star$ | 0.5 | SFR timescale as a fraction of $t_H(z)$ — 570 Myr at $z=7$ |
 | $t_\mathrm{obs}$ | 1000 h | Integration time |
 | Bandwidth | 8 MHz | HERA per-band bandwidth |
 | Wedge buffer | 0.02 Mpc$^{-1}$ | Safety margin beyond the horizon line |
 | PS binning | 20 × 20 | $(k_\perp, k_\parallel)$ bins |
 | Source model | `from_template(["simple"])`, `random_seed=42` | Grid-based halos, no Ts fluctuations |
 
-> **Thin-slab test configuration:** the committed $z$ range spans only
-> $\Delta z = 0.01$, i.e. $L_\mathrm{LOS} = 3.5$ Mpc at $z = 7$. The
-> cell-size-matched slice count would be $N_z = 2$, but `minimum_los_slices`
-> raises it to 100, giving a 0.035 Mpc LOS cell against a 2 Mpc transverse
-> cell — a $\sim 57\times$ oversampling along the line of sight. This is a
-> fast smoke-test setting, **not** a science configuration: it produces a
-> quasi-coeval slab with negligible redshift evolution. For a production run
-> matching notebook 3, set `z_min = 6.5`, `z_max = 7.5`
-> ($L_\mathrm{LOS} = 350.8$ Mpc, $N_z = 175$ at the natural cell size).
+> **Thin-slab test configuration — deliberate, and currently required.** The
+> committed $z$ range spans only $\Delta z = 0.01$, i.e.
+> $L_\mathrm{LOS} = 3.5$ Mpc at $z = 7$. The cell-size-matched slice count
+> would be $N_z = 2$, but `minimum_los_slices` raises it to 100, giving a
+> 0.035 Mpc LOS cell against a 2 Mpc transverse cell — a $\sim 57\times$
+> oversampling along the line of sight. It produces a quasi-coeval slab with
+> negligible redshift evolution.
+>
+> This is **not** merely a leftover. The power-spectrum estimator in
+> `src/analysis.py` assumes statistical homogeneity along the LOS, which only
+> holds for a quasi-coeval box, so configuration and formalism currently
+> match. Widening to a true lightcone ($z = 6.5$–$7.5$,
+> $L_\mathrm{LOS} = 350.8$ Mpc, $N_z = 175$) requires the estimator work in
+> [`TODO.md`](TODO.md) §P0 first — otherwise the FFT is applied to unevenly
+> sampled ($20.4\%$ cell-size spread), redshift-evolving data. Treat the
+> resulting SNR as a smoke-test number, not a forecast.
+
+> **The stored `outputs/lightcone_data.h5` is still stale.** The galaxy-bias
+> calculation has been corrected (see
+> [`docs/project_update.md`](docs/project_update.md) §4), which changes
+> `galaxy_bias` from 33.39 to 4.744 and $\beta_\mathrm{rsd}$ from 0.030 to
+> 0.210 — and therefore the `galaxy_overdensity` field, which carries the
+> Kaiser boost. Regenerate with `bash submit_job.sh --sim force`; the default
+> `--sim auto` will **not** re-run while the old file is present. With the
+> redshift range back at $\Delta z = 0.01$ this is a cheap re-run.
+
+**Galaxy bias.** Two estimators are computed at the end of Part 1:
+
+| Estimator | $b_g$ | Basis |
+|-----------|-------|-------|
+| Halo catalogue (**adopted**) | 4.74 | Per-halo $M_\mathrm{UV}$ from the catalogue's own SFR, then the mean Sheth-Tormen bias over the Euclid-selected halos. Inherits 21cmFAST's log-normal SFR scatter. |
+| Analytic HMF integral (cross-check) | 5.39 | Sheth-Tormen integrated over the mass function weighted by the *mean, scatter-free* scaling relation. |
+
+Both are written to the HDF5 (`galaxy_bias`, `galaxy_bias_hmf_analytic`,
+`galaxy_bias_method`). The previously recorded $b_g = 33.4$ was an artefact of
+passing `hmf`'s already-squared `MassFunction.nu` into a helper that squared it
+again; that path is gone.
 
 #### `notebooks/plot_fields.ipynb` — figures and literature references
 

@@ -32,6 +32,7 @@ References
 """
 
 import os
+import sys
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")   # non-interactive backend for HPC (no display required)
@@ -40,6 +41,24 @@ import h5py
 import warnings
 
 warnings.filterwarnings("ignore")
+
+# Repo root on sys.path so the shared helpers in src/ are importable when this
+# script is launched from anywhere.
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+# Shared calibrations — the single source of truth for the UV-SFR conversion,
+# the AB zero point, and 21cmFAST's star-formation timescale. Using these
+# rather than local copies keeps Part 1 consistent with the analysis stage.
+from src.analysis import (
+    T_STAR_DEFAULT,
+    effective_galaxy_bias,
+    select_euclid_halos,
+    star_formation_timescale,
+    stellar_mass_to_sfr,
+)
+from src.conversions import Muv_to_Luv, sfr_to_Luv, sheth_tormen_bias
 
 # ── Check whether 21cmFAST is installed ──────────────────────────────────────
 try:
@@ -77,6 +96,19 @@ DIM     = 3 * HII_DIM  # high-res grid for initial conditions
 # ---------------------------------------------------------------------------
 #  Lightcone redshift range
 # ---------------------------------------------------------------------------
+# SMOKE-TEST SLAB — deliberately narrow. Delta z = 0.01 gives L_LOS = 3.5 Mpc
+# at z ~ 7, which minimum_los_slices floors to N_z = 100 (a 0.035 Mpc LOS cell
+# against a 2 Mpc transverse cell, ~57x oversampled). It is quasi-coeval, with
+# negligible redshift evolution along the LOS.
+#
+# This is intentional and must stay this way for now: the power-spectrum
+# estimator in src/analysis.py assumes statistical homogeneity along the LOS,
+# which only holds for a quasi-coeval box. Widening to a true lightcone
+# (z = 6.5 - 7.5, L_LOS = 350.8 Mpc, N_z = 175) requires the estimator work in
+# TODO.md P0 first — otherwise the FFT is applied to unevenly sampled,
+# redshift-evolving data and the resulting spectra are not trustworthy.
+#
+# DO NOT widen this range without doing TODO.md P0.1 and P0.2 first.
 z_min = 6.995          # nearest redshift (low-z end of lightcone)
 z_max = 7.005          # farthest redshift (high-z end)
 
@@ -411,26 +443,90 @@ else:
 # 4  Estimate Euclid galaxy bias from luminosity-selected halo population
 # ===========================================================================
 
+# Two estimators are available, and they do not agree:
+#
+#   Catalogue-based (preferred) — converts each perturbed halo's own SFR to
+#     M_UV, applies the Euclid window, and averages the Sheth-Tormen bias over
+#     the survivors. This inherits 21cmFAST's log-normal scatter (SIGMA_STAR =
+#     0.25 dex, SIGMA_SFR_LIM = 0.19 dex), so the abundant low-mass halos that
+#     scatter up into the magnitude window are counted.
+#
+#   Analytic HMF integral (fallback) — integrates the Sheth-Tormen bias over
+#     the mass function weighted by a *mean, scatter-free* scaling relation.
+#     With no scatter, only rare high-mass halos make the magnitude cut, so
+#     this systematically overestimates the bias.
+#
+# The previous version used the analytic estimator with a hardcoded 100 Myr
+# star-formation timescale, inconsistent with 21cmFAST's own
+# t_STAR x t_H(z) ~ 570 Myr at z = 7. That combination produced b_g = 33.4
+# (see docs/project_update.md). The timescale is now taken from
+# star_formation_timescale(), and the catalogue estimator is authoritative
+# whenever a halo catalogue exists, so the bias stored here matches the one
+# the analysis stage reports.
+
+# ── Euclid absolute UV magnitude limits (more negative = brighter) ────────────
+M_UV_bright = -22
+M_UV_faint  = M_UV_limit
+
+# ── 21cmFAST star-formation timescale at the reference redshift ──────────────
+t_sf_yr = star_formation_timescale(
+    z_obs, t_star=T_STAR_DEFAULT,
+    hubble_constant=HUBBLE_CONSTANT, omega_m=OMEGA_M_0,
+)
+print(f"\nStar-formation timescale: t_sf = t_STAR x t_H(z_obs)"
+      f" = {T_STAR_DEFAULT} x {t_sf_yr / T_STAR_DEFAULT / 1e9:.3f} Gyr"
+      f" = {t_sf_yr / 1e6:.1f} Myr")
+
+galaxy_bias_catalog = None
+galaxy_bias_hmf     = None
+
+# ---------------------------------------------------------------------------
+#  Preferred estimator: the perturbed halo catalogue itself
+# ---------------------------------------------------------------------------
+if HAS_HMF and len(sfr_cat) > 0:
+    print("\nEstimating galaxy bias from the perturbed halo catalogue …")
+
+    euclid_selection = select_euclid_halos(
+        sfr=sfr_cat,
+        halo_masses=halo_masses,
+        M_UV_faint=M_UV_faint,
+        M_UV_bright=M_UV_bright,
+    )
+
+    print(f"  Euclid window   : {M_UV_bright} < M_UV < {M_UV_faint}")
+    print(f"  SFR window      : {euclid_selection.SFR_min:.3e}"
+          f" - {euclid_selection.SFR_max:.3e} Msun/yr")
+    print(f"  Halos SFR > 0   : {euclid_selection.n_valid:,}")
+    print(f"  Selected halos  : {euclid_selection.n_selected:,}")
+
+    if euclid_selection.n_selected > 0:
+        bias_estimate = effective_galaxy_bias(
+            selection=euclid_selection,
+            z_obs=z_obs,
+            hubble_constant=HUBBLE_CONSTANT,
+        )
+        galaxy_bias_catalog = bias_estimate.mean_bias
+
+        print(f"  Halo mass range : "
+              f"{euclid_selection.halo_masses.min():.3e}"
+              f" - {euclid_selection.halo_masses.max():.3e} Msun")
+        print(f"  <b_g>           : {galaxy_bias_catalog:.3f}"
+              f"  (range {bias_estimate.bias_min:.3f}"
+              f" - {bias_estimate.bias_max:.3f})")
+    else:
+        print("  No halos passed the magnitude cut — falling back to the HMF integral.")
+
+# ---------------------------------------------------------------------------
+#  Fallback / cross-check: analytic HMF integral over the mean relation
+# ---------------------------------------------------------------------------
 if HAS_HMF:
-    # --------------------------------------------------------------------------
-    # Euclid absolute UV magnitude limits
-    # More negative = brighter
-    # --------------------------------------------------------------------------
-    M_UV_bright = -22
-    M_UV_faint  = -18
-
-    def Muv_to_Luv(Muv):
-        # L_UV in erg s^-1 Hz^-1
-        return 10**((51.63 - Muv) / 2.5)
-
     L_UV_min = Muv_to_Luv(M_UV_faint)    # faint limit
     L_UV_max = Muv_to_Luv(M_UV_bright)   # bright limit
 
-    print(f"\nL_UV range = {L_UV_min:.3e} - {L_UV_max:.3e} erg s^-1 Hz^-1")
+    print(f"\nAnalytic HMF cross-check")
+    print(f"  L_UV range = {L_UV_min:.3e} - {L_UV_max:.3e} erg s^-1 Hz^-1")
 
-    # --------------------------------------------------------------------------
-    # 21cmFAST-like stellar-halo relation
-    # --------------------------------------------------------------------------
+    # ── 21cmFAST-like mean stellar-halo relation ─────────────────────────────
     F_STAR10   = 0.05
     ALPHA_STAR = 0.5
     M_TURN     = 5e8
@@ -438,21 +534,25 @@ if HAS_HMF:
     OMEGA_B_0 = 0.049
 
     def f_star(M_h):
+        """Stellar fraction f_*(M_h) with exponential turnover below M_TURN."""
         return F_STAR10 * (M_h / 1e10)**ALPHA_STAR * np.exp(-M_TURN / M_h)
 
     def stellar_mass_model(M_h):
+        """Mean stellar mass for a halo of mass M_h [Msun]."""
         return f_star(M_h) * (OMEGA_B_0 / OMEGA_M_0) * M_h
 
     def sfr_model(M_h):
-        # approximate star-formation timescale = 100 Myr
-        return stellar_mass_model(M_h) / 1e8
+        """Mean SFR [Msun/yr] using 21cmFAST's own t_STAR x t_H timescale."""
+        return stellar_mass_to_sfr(
+            stellar_mass_model(M_h), z=z_obs, t_star=T_STAR_DEFAULT,
+            hubble_constant=HUBBLE_CONSTANT, omega_m=OMEGA_M_0,
+        )
 
     def uv_luminosity(M_h):
-        return 1.15e28 * sfr_model(M_h)
+        """Mean UV luminosity [erg s^-1 Hz^-1] (Madau & Dickinson 2014)."""
+        return sfr_to_Luv(sfr_model(M_h))
 
-    # --------------------------------------------------------------------------
-    # Halo mass function
-    # --------------------------------------------------------------------------
+    # ── Halo mass function ───────────────────────────────────────────────────
     mf = MassFunction(
         z=z_obs,
         Mmin=7,
@@ -463,51 +563,48 @@ if HAS_HMF:
     M_h       = mf.m
     dndlog10m = mf.dndlog10m
 
-    # --------------------------------------------------------------------------
-    # Halo bias: Sheth-Tormen style analytic bias using mf.nu
-    # --------------------------------------------------------------------------
-    def sheth_tormen_bias_from_nu(nu, delta_c=1.686, a=0.707, p=0.3):
-        return 1.0 + (a * nu**2 - 1.0) / delta_c + (
-            2.0 * p / (delta_c * (1.0 + (a * nu**2)**p))
-        )
+    # ── Halo bias: Sheth-Tormen, from the squared peak height mf.nu ──────────
+    halo_bias = sheth_tormen_bias(mf.nu)
 
-    halo_bias = sheth_tormen_bias_from_nu(mf.nu)
-
-    # --------------------------------------------------------------------------
-    # Euclid selection
-    # --------------------------------------------------------------------------
+    # ── Euclid selection on the mean relation ────────────────────────────────
     L_UV     = uv_luminosity(M_h)
     selected = (L_UV >= L_UV_min) & (L_UV <= L_UV_max)
 
     if selected.sum() < 2:
-        raise RuntimeError(
-            "Too few halos satisfy the luminosity selection. "
-            "Check M_UV limits or the stellar-halo/SFR parameters."
-        )
+        print("  Too few mass bins satisfy the luminosity selection — "
+              "skipping the analytic cross-check.")
+    else:
+        logM = np.log10(M_h)
 
-    # --------------------------------------------------------------------------
-    # Effective galaxy number density and bias
-    # --------------------------------------------------------------------------
-    logM = np.log10(M_h)
+        n_gal = simpson(dndlog10m[selected], x=logM[selected])
+        galaxy_bias_hmf = simpson(
+            dndlog10m[selected] * halo_bias[selected],
+            x=logM[selected],
+        ) / n_gal
 
-    n_gal = simpson(
-        dndlog10m[selected],
-        x=logM[selected],
-    )
+        print(f"  n_gal = {n_gal:.3e} Mpc^-3")
+        print(f"  Analytic (scatter-free) galaxy bias = {galaxy_bias_hmf:.2f}")
+        print(f"  Selected halo mass range: "
+              f"{M_h[selected].min():.2e} - {M_h[selected].max():.2e} Msun")
 
-    galaxy_bias = simpson(
-        dndlog10m[selected] * halo_bias[selected],
-        x=logM[selected],
-    ) / n_gal
-
-    print(f"  n_gal = {n_gal:.3e} Mpc^-3")
-    print(f"  Estimated Euclid galaxy bias = {galaxy_bias:.2f}")
-    print(
-        f"  Selected halo mass range: "
-        f"{M_h[selected].min():.2e} - {M_h[selected].max():.2e} Msun"
-    )
+# ---------------------------------------------------------------------------
+#  Adopt one value
+# ---------------------------------------------------------------------------
+if galaxy_bias_catalog is not None:
+    galaxy_bias        = galaxy_bias_catalog
+    galaxy_bias_method = "halo_catalog"
+elif galaxy_bias_hmf is not None:
+    galaxy_bias        = galaxy_bias_hmf
+    galaxy_bias_method = "hmf_analytic"
 else:
+    galaxy_bias_method = "configured_default"
     print(f"\nUsing configured galaxy bias = {galaxy_bias}  (hmf not available).")
+
+print(f"\nAdopted galaxy bias b_g = {galaxy_bias:.3f}  (method: {galaxy_bias_method})")
+if galaxy_bias_catalog is not None and galaxy_bias_hmf is not None:
+    print(f"  Scatter-free analytic estimate would give {galaxy_bias_hmf:.3f} "
+          f"({galaxy_bias_hmf / galaxy_bias_catalog:.1f}x higher) — the "
+          f"difference is 21cmFAST's log-normal SFR scatter.")
 
 
 # ===========================================================================
@@ -606,6 +703,11 @@ with h5py.File(OUTPUT_FILE, "w") as f:
     f.attrs["z_max"]               = z_max
     f.attrs["z_obs"]               = z_obs
     f.attrs["galaxy_bias"]         = galaxy_bias
+    f.attrs["galaxy_bias_method"]  = galaxy_bias_method
+    if galaxy_bias_hmf is not None:
+        f.attrs["galaxy_bias_hmf_analytic"] = galaxy_bias_hmf
+    f.attrs["t_STAR"]              = T_STAR_DEFAULT
+    f.attrs["sfr_timescale_yr"]    = t_sf_yr
     f.attrs["beta_rsd"]            = beta_rsd
     f.attrs["mean_galaxy_density"] = mean_galaxy_density
     f.attrs["photoz_uncertainty"]  = photoz_uncertainty

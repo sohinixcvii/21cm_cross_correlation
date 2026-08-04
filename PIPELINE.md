@@ -168,7 +168,17 @@ noise levels, the total SNR, the Euclid selection counts, and ⟨b_g⟩.
 See `README.md` for the full science background and equation references, and
 `docs/project_update.md` for the latest run's numerical results.
 
-> **Check the redshift range before running.** The committed configuration in
-> `run_simulation.py` spans only `z_min = 6.995` → `z_max = 7.005`
-> ($L_\mathrm{LOS} = 3.5$ Mpc), a fast smoke-test slab rather than a science
-> lightcone. See the fiducial-parameter table in `README.md` §4.
+> **Regenerate the stored HDF5 before trusting any numbers.** As of
+> 2026-08-04 the galaxy-bias calculation is corrected: any
+> `outputs/lightcone_data.h5` written earlier carries $b_g = 33.4$ (a
+> ν-convention error) and $\beta_\mathrm{rsd} = 0.030$ instead of 4.74 and
+> 0.210, so its `galaxy_overdensity` field has the wrong Kaiser boost. Run
+> `bash submit_job.sh --sim force` — the default `--sim auto` will not re-run
+> while the old file exists. See `docs/project_update.md` §4 and §11.
+
+> **The redshift range is a deliberate smoke test.** `run_simulation.py` spans
+> only `z_min = 6.995` → `z_max = 7.005` ($L_\mathrm{LOS} = 3.5$ Mpc,
+> LOS oversampled $\sim 57\times$), giving a quasi-coeval slab. That matches
+> the power-spectrum estimator, which assumes LOS homogeneity. Widening it to
+> a true lightcone is gated on the estimator work in `TODO.md` §P0 — see the
+> fiducial-parameter table in `README.md` §4.

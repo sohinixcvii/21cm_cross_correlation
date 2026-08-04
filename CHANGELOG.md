@@ -7,6 +7,107 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Galaxy bias + production redshift range, 2026-08-04 ─────────────── -->
+
+### Fixed
+- **`run_simulation.py` — Sheth-Tormen ν convention (science-affecting):** the
+  local helper `sheth_tormen_bias_from_nu(nu)` computed `a * nu**2`, but
+  `hmf`'s `MassFunction.nu` is *already* the squared peak height (δ_c/σ)².
+  Squaring it again inflated ν from the range 2.37–51.7 to 5.6–2670 and the
+  bias with it, producing the `galaxy_bias = 33.39` recorded in the stored
+  HDF5. Reproducing the original code path returns 33.39 exactly, and the
+  corrected path returns 4.23 — confirming this, **not** the Euclid bright
+  limit, was the dominant cause of the anomaly that
+  `docs/project_update.md` had attributed to the magnitude cut and the SFR
+  timescale. This is the same convention error already fixed in
+  `notebooks/analysis.ipynb` ("Fix 1") but never back-ported. The local helper
+  is deleted; `src.conversions.sheth_tormen_bias` is used instead.
+- **`run_simulation.py` — SFR timescale:** `sfr_model` divided the stellar mass
+  by a hardcoded 100 Myr, inconsistent with 21cmFAST's internal
+  `t_STAR × t_H(z)` = 570.3 Myr at z = 7. The 5.70× SFR overestimate made every
+  galaxy 1.89 mag too bright at the selection step. Now uses the new
+  `src.analysis.star_formation_timescale`. On the analytic path this moves
+  b_g from 4.23 to 5.39.
+- **`run_simulation.py` — duplicated calibrations:** the script carried its own
+  `Muv_to_Luv` with a 51.63 AB zero point (vs 51.60 in `src/conversions.py`)
+  and an inverse-κ_UV factor of `1.15e28` (vs the correct 8.696e27 = 1/1.15e-28,
+  a 32 % discrepancy). Both are now imported from `src/conversions.py`, which
+  is the single source of truth.
+
+### Changed
+- **Galaxy bias is now measured from the halo catalogue, not the mean scaling
+  relation.** `run_simulation.py` calls `src.analysis.select_euclid_halos` +
+  `effective_galaxy_bias` — the same estimator the analysis stage uses — so
+  Part 1 and Part 3 can no longer disagree. **Adopted b_g = 4.744** (range
+  2.83–9.14 over 49,315 selected halos). The scatter-free analytic HMF
+  integral is retained as a printed cross-check (5.39, ~14 % high because it
+  misses the low-mass halos that 21cmFAST's log-normal scatter pushes into the
+  magnitude window). Consequence: **β_rsd = f/b_g goes from 0.0299 to 0.2103**,
+  a ~7× stronger Kaiser boost.
+- **Redshift range: widened, then reverted — deliberately left at Δz = 0.01.**
+  `z_min`/`z_max` were briefly set to the production range 6.5 / 7.5
+  (L_LOS = 350.8 Mpc, N_z = 175, 10 node redshifts, verified numerically
+  against Planck18) and then returned to 6.995 / 7.005. Reason: the
+  power-spectrum estimator in `src/analysis.py` is inherited from the coeval
+  notebook and assumes statistical homogeneity along the LOS. That assumption
+  holds for the quasi-coeval Δz = 0.01 slab, so configuration and formalism
+  currently match; at Δz = 1.0 it fails in four measured ways (see the
+  `TODO.md` entry below). Widening Δz is now **gated on `TODO.md` §P0**, and
+  `run_simulation.py` carries an explicit "do not widen without P0.1/P0.2"
+  comment at the config block.
+- **`outputs/lightcone_data.h5` is stale — because of the bias fix alone.**
+  The corrected `galaxy_bias` (33.39 → 4.744) changes β_rsd (0.030 → 0.210)
+  and therefore the `galaxy_overdensity` field, which carries the Kaiser
+  boost. The other three fields are unaffected. `--sim auto` will not
+  regenerate while the file exists; use `bash submit_job.sh --sim force`
+  — cheap, since the redshift range is unchanged. Warnings added to
+  `README.md`, `PIPELINE.md`, and `docs/project_update.md`.
+- **`src/figures.py` — González+10 relation re-enabled** in
+  `plot_stellar_mass_muv`, alongside Song+16. It had been commented out in
+  `notebooks/plot_fields.ipynb` and was carried over disabled. Its ~0.2 dex
+  higher normalisation follows from the constant-star-formation-history
+  assumption.
+- **`docs/project_update.md` rewritten** (2026-06-15 → 2026-08-04): corrects
+  the b_g diagnosis, records both estimators, adds the analysis-stage results
+  the pipeline now produces, marks the superseded run's numbers as such, and
+  adds §12 costing the deferred 1 Gpc box.
+
+### Added
+- **`TODO.md`** — priority-ordered outstanding work. Records, with measured
+  numbers, that widening to Δz = 1.0 would **invalidate three assumptions**
+  baked into the power-spectrum estimator inherited from the coeval notebook,
+  none of which has been addressed — which is why the range was reverted and
+  the widening (P0.5) is gated behind them: (P0.1) `lc_redshifts` is uniform in redshift,
+  so the LOS comoving cell varies by **20.4 %** across the box (2.214 → 1.838
+  Mpc) while the FFT assumes a single 2.005 Mpc spacing — fixable with
+  `RectilinearLightconer.between_redshifts`, which spaces slices uniformly in
+  comoving distance; (P0.2) `compute_all_power_spectra` subtracts a single
+  global mean, leaving the ⟨T_b⟩(z) evolution as a spurious LOS ramp that
+  aliases into low-k_∥; (P0.3/P0.4) one FFT over Δz = 1 returns a
+  redshift-averaged spectrum with no well-defined effective redshift, and it
+  spans **22.28 MHz** against the **8 MHz** the noise model assumes — a 2.8×
+  mismatch, resolvable by computing the spectrum in 8 MHz sub-bands. The old
+  Δz = 0.01 slab had a 0.19 % cell spread and was quasi-coeval, which is why
+  none of this surfaced before.
+- **`src.analysis.star_formation_timescale(z, t_star)`** — 21cmFAST's
+  `t_sf = t_STAR × t_H(z)`, matching astropy's Planck18 Hubble time to 0.08 %,
+  plus **`stellar_mass_to_sfr`** and the `T_STAR_DEFAULT = 0.5` constant.
+- **Five new HDF5 root attributes:** `galaxy_bias_method`,
+  `galaxy_bias_hmf_analytic`, `t_STAR`, `sfr_timescale_yr` (all additive;
+  `dataio.get()` tolerates their absence in older files).
+- **Five tests** (69 total, all passing): the timescale against astropy, its
+  t_STAR/redshift scaling, a 570-Myr regression guard against the 100 Myr
+  value returning, `stellar_mass_to_sfr` inversion, and a guard that
+  `sheth_tormen_bias` is not double-squaring its argument.
+- **`docs/project_update.md` §12 — 1 Gpc box costed and deferred.** Reaching
+  the Davies et al. (2025) box at the same 2 Mpc cell means `HII_DIM` 128 →
+  500, `DIM` 384 → 1500: **59.6× the volume**, ~6.8 × 10⁹ halos, a **~163 GB**
+  halo catalogue (from 2.74 GB), and **13.5 GB** for a single high-resolution
+  initial-conditions array. Storage, not code, is the constraint — the
+  parameters are already configurable and `--max-halos` exists for catalogues
+  of this size. A 512 Mpc intermediate (8× volume, ~22 GB catalogue) is
+  suggested as a scaling test.
+
 <!-- ─── Full-pipeline driver, 2026-08-04 ────────────────────────────────── -->
 
 ### Added

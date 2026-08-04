@@ -27,6 +27,62 @@ def test_hubble_parameter_increases_with_redshift() -> None:
     assert np.all(np.diff(h_z) > 0)
 
 
+def test_star_formation_timescale_matches_astropy() -> None:
+    """t_sf = t_STAR / H(z) agrees with astropy's Hubble time to <1 %."""
+    astropy_cosmology = pytest.importorskip("astropy.cosmology")
+    import astropy.units as u
+
+    expected = 0.5 * (1.0 / astropy_cosmology.Planck18.H(7.0)).to(u.yr).value
+    assert analysis.star_formation_timescale(7.0) == pytest.approx(expected, rel=0.01)
+
+
+def test_star_formation_timescale_is_570_myr_at_z7() -> None:
+    """The 21cmFAST 'simple' template gives ~570 Myr at z = 7, not 100 Myr.
+
+    Regression guard: a hardcoded 100 Myr timescale was the documented cause
+    of the inconsistent Part 1 galaxy bias.
+    """
+    t_sf = analysis.star_formation_timescale(7.0)
+    assert 5.5e8 < t_sf < 5.9e8
+    assert t_sf / 1e8 == pytest.approx(5.70, rel=0.02)
+
+
+def test_star_formation_timescale_scales_with_t_star() -> None:
+    """t_sf is linear in t_STAR and decreases with redshift."""
+    assert analysis.star_formation_timescale(7.0, t_star=1.0) == pytest.approx(
+        2 * analysis.star_formation_timescale(7.0, t_star=0.5)
+    )
+    assert analysis.star_formation_timescale(7.5) < analysis.star_formation_timescale(6.5)
+
+
+def test_stellar_mass_to_sfr_inverts_the_timescale() -> None:
+    """SFR = M_star / t_sf, elementwise."""
+    stellar = np.array([1e8, 1e9, 1e10])
+    sfr = analysis.stellar_mass_to_sfr(stellar, z=7.0)
+    np.testing.assert_allclose(
+        sfr, stellar / analysis.star_formation_timescale(7.0), rtol=1e-12
+    )
+
+
+def test_sheth_tormen_bias_expects_squared_peak_height() -> None:
+    """b(nu_sq) must not re-square its argument.
+
+    Regression guard: run_simulation.py once passed hmf's already-squared
+    ``mf.nu`` into a helper that squared it again, inflating the stored
+    galaxy bias from ~4.2 to 33.4.
+    """
+    from src.conversions import sheth_tormen_bias
+
+    # For nu_sq = 1/a the linear term vanishes, giving an analytic value.
+    a, p, delta_c = 0.707, 0.3, 1.686
+    nu_sq = 1.0 / a
+    expected = 1.0 + 0.0 + 2.0 * p / (delta_c * (1.0 + 1.0**p))
+    assert sheth_tormen_bias(nu_sq) == pytest.approx(expected)
+
+    # A doubly-squared argument would land far away from this.
+    assert sheth_tormen_bias(nu_sq**2) != pytest.approx(expected)
+
+
 def test_comoving_distance_matches_astropy() -> None:
     """D_c(z) agrees with astropy's Planck18 to better than 1 %."""
     astropy_cosmology = pytest.importorskip("astropy.cosmology")

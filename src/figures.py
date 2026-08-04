@@ -681,7 +681,10 @@ def plot_stellar_mass_muv(
     seed: int = 42,
 ) -> Figure:
     """
-    Stellar mass versus UV magnitude, against the Song+16 z ~ 7 relation.
+    Stellar mass versus UV magnitude, against two z ~ 7 relations.
+
+    Overlays Song et al. (2016) and González et al. (2010); the latter lies
+    ~0.2 dex higher because of its constant-star-formation-history assumption.
 
     Parameters
     ----------
@@ -725,6 +728,10 @@ def plot_stellar_mass_muv(
     muv_lit = np.linspace(-24.5, -13.5, 300)
     ax.plot(muv_lit, 8.86 - 0.5 * (muv_lit + 20.0), color="royalblue", ls="--",
             lw=2, label=r"Song+16 $z\sim7$")
+    # González+10 sits ~0.2 dex above Song+16: their constant-star-formation-
+    # history assumption raises the inferred stellar masses.
+    ax.plot(muv_lit, 9.06 - 0.5 * (muv_lit + 20.0), color="tomato", ls="-.",
+            lw=2, label="González+10 " + r"$z\sim7$")
 
     ax.axvline(m_uv_limit, color="dimgray", ls="--", lw=1.5,
                label=rf"Euclid limit ($M_{{\rm UV}}={m_uv_limit:.0f}$)")

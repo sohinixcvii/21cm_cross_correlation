@@ -47,6 +47,9 @@ except ImportError:  # direct import of the module (src/ on sys.path)
 __all__ = [
     "hubble_parameter",
     "comoving_distance",
+    "star_formation_timescale",
+    "stellar_mass_to_sfr",
+    "T_STAR_DEFAULT",
     "compute_cylindrical_cross_power",
     "compute_all_power_spectra",
     "horizon_wedge_slope",
@@ -126,6 +129,90 @@ def comoving_distance(
         z,
     )
     return float(integral)
+
+
+# 21cmFAST "simple" template default: the star-formation timescale is a fixed
+# fraction of the Hubble time (Park et al. 2019; scaling_relations.c).
+T_STAR_DEFAULT = 0.5
+
+# Megaparsec in kilometres, for converting 1/H(z) from Mpc s km^-1 to seconds.
+_KM_PER_MPC = 3.0856775814913673e19
+_SEC_PER_YR = 365.25 * 24 * 3600
+
+
+def star_formation_timescale(
+    z: float,
+    t_star: float = T_STAR_DEFAULT,
+    hubble_constant: float = 67.36,
+    omega_m: float = 0.315,
+) -> float:
+    """
+    21cmFAST star-formation timescale ``t_sf = t_STAR × t_H(z)``.
+
+    This is the timescale 21cmFAST actually uses internally to turn a stellar
+    mass into a star-formation rate (``sfr = M_star / (t_STAR t_H)``), so any
+    external SFR model must use it too — a hardcoded 100 Myr instead of the
+    ~570 Myr this returns at z = 7 biases every derived UV luminosity by
+    ~1.9 magnitudes.
+
+    Parameters
+    ----------
+    z : float
+        Redshift.
+    t_star : float, optional
+        Fraction of the Hubble time, 21cmFAST's ``t_STAR``.  Default 0.5,
+        the "simple" template value.
+    hubble_constant : float, optional
+        H_0 [km s^-1 Mpc^-1].
+    omega_m : float, optional
+        Present-day matter density parameter.
+
+    Returns
+    -------
+    float
+        t_sf [yr].
+
+    References
+    ----------
+    Park et al. (2019), MNRAS 484, 933 — Eq. 3.
+    ``py21cmfast/src/scaling_relations.c``, ``get_halo_sfr()``.
+    """
+    h_z_kms_mpc = hubble_parameter(z, hubble_constant, omega_m)
+    t_hubble_seconds = _KM_PER_MPC / h_z_kms_mpc
+    return float(t_star * t_hubble_seconds / _SEC_PER_YR)
+
+
+def stellar_mass_to_sfr(
+    stellar_mass: float | np.ndarray,
+    z: float,
+    t_star: float = T_STAR_DEFAULT,
+    hubble_constant: float = 67.36,
+    omega_m: float = 0.315,
+) -> float | np.ndarray:
+    """
+    Convert stellar mass to star-formation rate using 21cmFAST's own timescale.
+
+    Parameters
+    ----------
+    stellar_mass : float or ndarray
+        Stellar mass [M_sun].
+    z : float
+        Redshift.
+    t_star : float, optional
+        21cmFAST ``t_STAR``.
+    hubble_constant : float, optional
+        H_0 [km s^-1 Mpc^-1].
+    omega_m : float, optional
+        Present-day matter density parameter.
+
+    Returns
+    -------
+    float or ndarray
+        SFR [M_sun yr^-1].
+    """
+    return stellar_mass / star_formation_timescale(
+        z, t_star, hubble_constant, omega_m
+    )
 
 
 # ===========================================================================
