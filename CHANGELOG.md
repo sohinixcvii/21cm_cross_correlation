@@ -7,6 +7,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Mass resolution reporting, 2026-08-05 ───────────────────────────── -->
+
+### Added
+- **`src/conversions.py` — mass-resolution helpers:** `mean_matter_density()`
+  returns the comoving mean matter density $\bar\rho_m = \Omega_m
+  \rho_{\mathrm{crit},0}$, and `cell_mass()` returns the mean matter mass
+  enclosed by one cubic comoving cell, $M_\mathrm{cell} = \bar\rho_m
+  L_\mathrm{cell}^3$ — the grid mass resolution.
+- **`notebooks/plot_fields.ipynb` — "Mass resolution" block** in the parameter
+  summary cell (cell 5, directly after "Grid & box geometry"). Prints
+  $\bar\rho_m$, `DIM`, the high-res cell size, the mass resolution of both
+  grids, and `SAMPLER_MIN_MASS`. For the production run this is
+  $1.18\times10^{10}\ M_\odot$ per `DIM` cell (0.667 Mpc),
+  $3.17\times10^{11}\ M_\odot$ per `HII_DIM` cell (2.00 Mpc), and a halo
+  sampler floor of $1\times10^{8}\ M_\odot$. The block falls back to
+  `DIM = 3 × HII_DIM` and the halo-catalogue minimum for HDF5 files written
+  before these attributes existed, so it works with the stored output.
+- **`run_simulation.py` — mass resolution in the startup summary** and four new
+  HDF5 attributes: `DIM`, `hires_cell_size`, `M_cell_hires`, `M_cell_lores`,
+  and `sampler_min_mass` (read from
+  `inputs.simulation_options.SAMPLER_MIN_MASS`; `NaN` on the synthetic
+  fallback path).
+- **`tests/test_conversions.py`** — 7 tests for the new helpers: $\bar\rho_m$
+  against `astropy.cosmology.Planck18`, the $H_0^2$ and $L^3$ scalings, the
+  production-grid values, the 27× ratio between the two grids, total-box mass
+  conservation, and array input. Suite is now 76 tests, all passing.
+
 <!-- ─── Galaxy bias + production redshift range, 2026-08-04 ─────────────── -->
 
 ### Fixed

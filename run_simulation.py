@@ -58,7 +58,7 @@ from src.analysis import (
     star_formation_timescale,
     stellar_mass_to_sfr,
 )
-from src.conversions import Muv_to_Luv, sfr_to_Luv, sheth_tormen_bias
+from src.conversions import Muv_to_Luv, cell_mass, sfr_to_Luv, sheth_tormen_bias
 
 # ── Check whether 21cmFAST is installed ──────────────────────────────────────
 try:
@@ -189,8 +189,16 @@ else:
     D_min, _ = quad(lambda z_: SPEED_OF_LIGHT_KMS / hubble_parameter(z_), 0, z_min)
     D_max, _ = quad(lambda z_: SPEED_OF_LIGHT_KMS / hubble_parameter(z_), 0, z_max)
 
-L_los     = D_max - D_min   # comoving LOS extent  [Mpc]
-cell_size = BOX_LEN / HII_DIM
+L_los          = D_max - D_min   # comoving LOS extent  [Mpc]
+cell_size      = BOX_LEN / HII_DIM
+hires_cell_size = BOX_LEN / DIM   # initial-conditions cell size  [Mpc]
+
+# ── Mass resolution ──────────────────────────────────────────────────────────
+# The mean comoving matter mass enclosed by one cell. This is the smallest mass
+# element each grid can represent: DIM sets it for the initial-conditions /
+# density field, HII_DIM for the coarse ionisation and 21 cm grids.
+M_cell_hires = cell_mass(hires_cell_size, OMEGA_M_0, HUBBLE_CONSTANT)
+M_cell_lores = cell_mass(cell_size,       OMEGA_M_0, HUBBLE_CONSTANT)
 
 # ── Reference redshift (centre of lightcone, used for noise / wedge) ─────────
 z_obs = 0.5 * (z_min + z_max)
@@ -211,6 +219,8 @@ node_redshifts = np.linspace(z_max, z_min, n_nodes)   # high-z → low-z
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 print(f"Box         : {BOX_LEN:.0f} Mpc,  {HII_DIM}³ cells  →  cell size = {cell_size:.1f} Mpc")
+print(f"Mass res.   : {M_cell_hires:.3e} M⊙/cell (DIM={DIM}, {hires_cell_size:.3f} Mpc)  |  "
+      f"{M_cell_lores:.3e} M⊙/cell (HII_DIM={HII_DIM}, {cell_size:.2f} Mpc)")
 print(f"Lightcone   : z = {z_min} → {z_max}   (reference z_obs = {z_obs})")
 print(f"LOS extent  : {L_los:.1f} Mpc  →  N_z = {N_z} slices")
 print(f"Box shape   : ({HII_DIM}, {HII_DIM}, {N_z})")
@@ -283,6 +293,10 @@ if HAS_21CMFAST:
     print("\nMatter options:")
     print(inputs.matter_options)
 
+    # Smallest halo the stochastic halo sampler populates — this sets the mass
+    # resolution of the halo catalogue (and hence of the galaxy field).
+    sampler_min_mass = float(inputs.simulation_options.SAMPLER_MIN_MASS)
+
 else:
     # ==================================================================
     #  Synthetic lightcone fallback (21cmFAST not installed)
@@ -323,6 +337,9 @@ else:
     )
 
     lc_dist_Mpc = D_min + (D_max - D_min) * np.linspace(0, 1, N_z)
+
+    # No halo sampler in the synthetic fallback — no halo mass resolution.
+    sampler_min_mass = np.nan
 
     print(f"  Shape  : {brightness_temp_field.shape}")
     print(f"  ⟨x_HI⟩ : {np.mean(neutral_fraction):.3f}")
@@ -695,10 +712,15 @@ with h5py.File(OUTPUT_FILE, "w") as f:
 
     # ── Scalar metadata (read back as attrs in the notebooks) ─────────────
     f.attrs["HII_DIM"]             = HII_DIM
+    f.attrs["DIM"]                 = DIM
     f.attrs["BOX_LEN"]             = BOX_LEN
     f.attrs["N_z"]                 = N_z
     f.attrs["L_los"]               = L_los
     f.attrs["cell_size"]           = cell_size
+    f.attrs["hires_cell_size"]     = hires_cell_size
+    f.attrs["M_cell_hires"]        = M_cell_hires
+    f.attrs["M_cell_lores"]        = M_cell_lores
+    f.attrs["sampler_min_mass"]    = sampler_min_mass
     f.attrs["z_min"]               = z_min
     f.attrs["z_max"]               = z_max
     f.attrs["z_obs"]               = z_obs

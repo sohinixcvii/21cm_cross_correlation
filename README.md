@@ -533,6 +533,7 @@ from src.conversions import (
     Muv_to_Luv, Luv_to_Muv,
     Luv_to_sfr, sfr_to_Luv, sfr_to_Muv,
     sheth_tormen_bias,
+    mean_matter_density, cell_mass,
     survey_area_from_volume,
     area_deg2_to_steradians,
     volume_from_area,
@@ -564,6 +565,30 @@ from src.conversions import (
 > *squared* peak height $(δ_c/σ)^2$, consistent with the original Sheth &
 > Tormen (1999) notation. Pass `mf.nu` directly to `sheth_tormen_bias` — do
 > not square it again.
+
+**Mass resolution**
+
+| Function | Description |
+|----------|-------------|
+| `mean_matter_density(omega_m, hubble_constant)` | Comoving mean matter density $\bar\rho_m = \Omega_m \rho_{\mathrm{crit},0}$ [M☉ Mpc⁻³]. Defaults to Planck18 |
+| `cell_mass(cell_size_mpc, omega_m, hubble_constant)` | Mean matter mass enclosed by one cubic comoving cell, $M_\mathrm{cell} = \bar\rho_m L_\mathrm{cell}^3$ [M☉] — the grid mass resolution |
+
+For the production grid (`BOX_LEN = 256` Mpc, `HII_DIM = 128`, `DIM = 384`,
+$\Omega_m = 0.315$, $H_0 = 67.36$):
+
+| Grid | Cell size | Mass resolution |
+|------|-----------|-----------------|
+| `DIM` (initial conditions / density field) | 0.667 Mpc | $1.18\times10^{10}\ M_\odot$ per cell |
+| `HII_DIM` (ionisation, 21 cm brightness) | 2.00 Mpc | $3.17\times10^{11}\ M_\odot$ per cell |
+| Halo catalogue (`SAMPLER_MIN_MASS`) | — | $1\times10^{8}\ M_\odot$ (smallest sampled halo) |
+
+> The halo catalogue is *not* limited by the grid mass resolution: 21cmFAST's
+> stochastic halo sampler populates each cell down to `SAMPLER_MIN_MASS`, so
+> the galaxy field resolves halos ~100× lighter than a single `DIM` cell. The
+> grid masses set the resolution of the *density* field, not the halo field.
+> All three values are printed by the parameter-summary cell of
+> `notebooks/plot_fields.ipynb` and stored as HDF5 attributes
+> (`M_cell_hires`, `M_cell_lores`, `sampler_min_mass`).
 
 **Survey geometry conversions**
 
@@ -724,7 +749,7 @@ least one corresponding test, in `tests/test_<module>.py`. Run the suite with:
 conda run -n 21cmfast pytest tests/ -v
 ```
 
-**Current status: 64 tests, all passing in ~20 s.** No test invokes 21cmFAST —
+**Current status: 76 tests, all passing in ~15 s.** No test invokes 21cmFAST —
 `tests/conftest.py` writes a synthetic `lightcone_data.h5` with the same schema
 (16² × 12 cells, 4 000 halos), so the whole suite runs offline.
 
@@ -734,11 +759,13 @@ conda run -n 21cmfast pytest tests/ -v
 | `test_dataio.py` | HDF5 loading, metadata accessors, halo subsampling, field/catalogue skipping, product-cache round trip and staleness detection |
 | `test_figures.py` | Headless backend, NaN filling, colormap, and that every one of the 10 figure functions renders and writes a non-empty file |
 | `test_pipeline.py` | CLI parsing, each stage's `auto`/`force`/`skip` behaviour (with a stub simulation script), and end-to-end runs checking figures, cache reuse, and the summary JSON |
+| `test_conversions.py` | Mass-resolution helpers: $\bar\rho_m$ against astropy, $H_0^2$ and $L^3$ scalings, the production-grid values, and total-box mass conservation |
 
-> `src/conversions.py` and `src/FOV_to_cMpc.py` are still untested directly,
-> though the conversion round-trips are exercised indirectly through the
-> selection and UVLF tests. The remaining first candidates are the explicit
-> identities `Muv_to_Luv` ↔ `Luv_to_Muv` and `sfr_to_Luv` ↔ `Luv_to_sfr`.
+> `src/FOV_to_cMpc.py` and the magnitude/SFR half of `src/conversions.py` are
+> still untested directly, though the conversion round-trips are exercised
+> indirectly through the selection and UVLF tests. The remaining first
+> candidates are the explicit identities `Muv_to_Luv` ↔ `Luv_to_Muv` and
+> `sfr_to_Luv` ↔ `Luv_to_sfr`.
 
 ## References
 

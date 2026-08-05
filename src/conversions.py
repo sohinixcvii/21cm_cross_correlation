@@ -92,6 +92,10 @@ def Luv_to_Muv(Luv):
 # Chabrier (2003) IMF, rest-frame ~1500 Å
 _KAPPA_UV_MADAU14 = 1.15e-28
 
+# Critical density of the Universe today, in units of  M_sun Mpc^-3 h^-2.
+#   rho_crit,0 = 3 H_0^2 / (8 pi G)  with  H_0 = 100 h km/s/Mpc
+_RHO_CRIT_0_MSUN_MPC3_H2 = 2.77536627e11
+
 
 def Luv_to_sfr(Luv, kappa_uv=_KAPPA_UV_MADAU14):
     """
@@ -231,6 +235,78 @@ def sheth_tormen_bias(nu_sq, delta_c=1.686, a=0.707, p=0.3):
     """
     a_nu = a * nu_sq
     return 1.0 + (a_nu - 1.0) / delta_c + (2.0 * p) / (delta_c * (1.0 + a_nu**p))
+
+
+def mean_matter_density(
+    omega_m: float = Planck18.Om0,
+    hubble_constant: float = Planck18.H0.value,
+) -> float:
+    """
+    Mean comoving matter density of the Universe.
+
+    Parameters
+    ----------
+    omega_m : float, optional
+        Matter density parameter Ω_m at z = 0. Defaults to Planck18.
+
+    hubble_constant : float, optional
+        Hubble constant H_0 in km s^-1 Mpc^-1. Defaults to Planck18.
+
+    Returns
+    -------
+    rho_m : float
+        Comoving mean matter density  ρ̄_m  in  M_sun Mpc^-3.
+
+    Notes
+    -----
+    The comoving matter density is constant in time,
+
+        ρ̄_m = Ω_m ρ_crit,0 = Ω_m · 3 H_0² / (8 π G),
+
+    so a comoving cell of fixed size always encloses the same mean mass.
+
+    Examples
+    --------
+    >>> f"{mean_matter_density():.3e}"
+    '3.934e+10'
+    """
+    h_squared = (hubble_constant / 100.0) ** 2
+    return omega_m * _RHO_CRIT_0_MSUN_MPC3_H2 * h_squared
+
+
+def cell_mass(
+    cell_size_mpc: float,
+    omega_m: float = Planck18.Om0,
+    hubble_constant: float = Planck18.H0.value,
+) -> float:
+    """
+    Mean matter mass enclosed by one cubic comoving grid cell.
+
+    This is the mass resolution of a grid-based (Eulerian) simulation: the
+    smallest mass element the density field can represent.
+
+    Parameters
+    ----------
+    cell_size_mpc : float
+        Comoving side length of a single cubic cell, in Mpc.
+
+    omega_m : float, optional
+        Matter density parameter Ω_m at z = 0. Defaults to Planck18.
+
+    hubble_constant : float, optional
+        Hubble constant H_0 in km s^-1 Mpc^-1. Defaults to Planck18.
+
+    Returns
+    -------
+    mass : float
+        Mean enclosed matter mass  M_cell = ρ̄_m · L_cell³  in  M_sun.
+
+    Examples
+    --------
+    >>> f"{cell_mass(2.0):.3e}"   # 256 Mpc box on a 128³ grid
+    '3.147e+11'
+    """
+    return mean_matter_density(omega_m, hubble_constant) * cell_size_mpc**3
 
 
 def sfr_to_Muv(sfr, kappa_uv=_KAPPA_UV_MADAU14):
