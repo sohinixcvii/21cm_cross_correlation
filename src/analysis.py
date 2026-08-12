@@ -465,7 +465,7 @@ def foreground_wedge_mask(
     k_perp: np.ndarray,
     k_parallel: np.ndarray,
     slope: float,
-    buffer: float = 0.02,
+    buffer: float = 0.0677,
 ) -> np.ndarray:
     """
     Boolean mask of ``(k_perp, k_parallel)`` bins that survive wedge excision.
@@ -477,7 +477,9 @@ def foreground_wedge_mask(
     slope : float
         Wedge slope, from :func:`horizon_wedge_slope`.
     buffer : float, optional
-        Safety margin added above the wedge line [Mpc^-1].
+        Safety margin added above the wedge line [Mpc^-1]. Default 0.0677
+        = 0.1 h Mpc^-1 at h = 0.6766 (Pober et al. 2014 "moderate" foreground
+        model; the 21cmSense ``horizon_buffer`` default).
 
     Returns
     -------

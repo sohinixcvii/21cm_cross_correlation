@@ -156,7 +156,7 @@ def write_tiny_simulation(
         f.attrs["HERA_DISH_DIAMETER"] = 14.0
         f.attrs["integration_time"] = 1000 * 3600
         f.attrs["bandwidth"] = 8e6
-        f.attrs["wedge_buffer"] = 0.02
+        f.attrs["wedge_buffer"] = 0.0677
         f.attrs["n_bins_perp"] = 8
         f.attrs["n_bins_parallel"] = 8
 

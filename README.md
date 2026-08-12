@@ -329,7 +329,7 @@ A refactored version of notebook 3 split into three independent parts for cluste
 | $t_\star$ | 0.5 | SFR timescale as a fraction of $t_H(z)$ — 570 Myr at $z=7$ |
 | $t_\mathrm{obs}$ | 1000 h | Integration time |
 | Bandwidth | 8 MHz | HERA per-band bandwidth |
-| Wedge buffer | 0.02 Mpc$^{-1}$ | Safety margin beyond the horizon line |
+| Wedge buffer | 0.0677 Mpc$^{-1}$ | Safety margin beyond the horizon line — $0.1\ h\ \mathrm{Mpc}^{-1}$ at $h = 0.6766$ (Pober et al. 2014 "moderate" foreground model; the 21cmSense `horizon_buffer` default) |
 | PS binning | 20 × 20 | $(k_\perp, k_\parallel)$ bins |
 | Source model | `from_template(["simple"])`, `random_seed=42` | Grid-based halos, no Ts fluctuations |
 
@@ -785,6 +785,8 @@ conda run -n 21cmfast pytest tests/ -v
 - **Bardeen, Bond, Kaiser & Szalay (1986)**, ApJ, 304, 15 — BBKS transfer function
 - **Kaiser (1987)**, MNRAS, 227, 1 — redshift-space distortions
 - **DeBoer et al. (2017)**, PASP — [arXiv:1606.07473](https://arxiv.org/abs/1606.07473) — HERA instrument specifications
+- **Pober et al. (2014)**, ApJ, 782, 66 — [arXiv:1310.7031](https://arxiv.org/abs/1310.7031) — "moderate" foreground model; source of the $0.1\ h\ \mathrm{Mpc}^{-1}$ wedge buffer and the 21cmSense `horizon_buffer` default
+- **Parsons et al. (2012a)**, ApJ, 756, 165 — [arXiv:1204.4749](https://arxiv.org/abs/1204.4749) — beam chromaticity and delay-taper leakage extending foreground power $\sim 0.15\ h\ \mathrm{Mpc}^{-1}$ beyond the horizon
 - **Planck Collaboration (2020)**, A&A, 641, A6 — [arXiv:1807.06209](https://arxiv.org/abs/1807.06209) — cosmological parameters
 - **Hogg (1999)** — [arXiv:astro-ph/9905116](https://arxiv.org/abs/astro-ph/9905116) — comoving distance and volume formulae
 - **Oke & Gunn (1983)**, ApJ, 266, 713 — AB magnitude system

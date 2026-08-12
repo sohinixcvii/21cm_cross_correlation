@@ -7,6 +7,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Foreground wedge buffer, 2026-08-07 ─────────────────────────────── -->
+
+### Changed
+- **Foreground wedge buffer: $0.02 \to 0.0677\ \mathrm{Mpc}^{-1}$
+  (science-affecting).** The old value was an unsourced placeholder, carried
+  unchanged since the first commit (`dc68fdf`) with only the comment "safety
+  margin beyond the horizon line". It is now set to the literature standard,
+  $0.1\ h\ \mathrm{Mpc}^{-1}$, converted at $h = 0.6766$ (Planck 2018).
+
+  **Motivation.** $0.1\ h\ \mathrm{Mpc}^{-1}$ is the additive buffer of the
+  "moderate" foreground model of **Pober et al. (2014)**
+  ([arXiv:1310.7031](https://arxiv.org/abs/1310.7031)), and is the default
+  `horizon_buffer` in [21cmSense](https://github.com/rasg-affiliates/21cmSense).
+  It traces to **Parsons et al. (2012a)**
+  ([arXiv:1204.4749](https://arxiv.org/abs/1204.4749)), who showed that primary
+  beam chromaticity combined with the tapering function applied in delay-space
+  power spectrum estimation leaks foreground power $\sim 0.15\ h\
+  \mathrm{Mpc}^{-1}$ beyond the horizon line. Note that **La Plante et al.
+  (2023)**, the source of our wedge slope (their Eq. 10), applies *no* buffer
+  and treats the bare horizon as the maximal-contamination case; the buffer
+  here is the more conservative choice.
+
+  **Scale check at $z_\mathrm{obs} = 7$.** Converting to delay via
+  $k_\parallel = 2\pi\tau f_{21} H(z) / [c(1+z)^2]$, the old buffer was only a
+  $\sim 50$ ns margin, against the $\gtrsim 300$ ns at which HERA sees
+  chromatic calibration wings; the new value is $\sim 170$ ns. The old buffer
+  was also comparable to the lightcone's fundamental mode
+  ($k_\parallel^\mathrm{min} = 0.018\ \mathrm{Mpc}^{-1}$ for
+  $L_\mathrm{LOS} = 351$ Mpc at $z = 6.5$–$7.5$), i.e. it excised barely one
+  bin and left the outside-wedge mode fraction and total SNR optimistic.
+
+  **Call sites updated:** `run_simulation.py` (config, also written to the HDF5
+  root attrs), `21cmfast_HERAxEuclid_lightcone.ipynb` (config cell 4),
+  `src/analysis.py` (`foreground_wedge_mask` default), `run_pipeline.py`
+  (`data.get` fallback), and `tests/conftest.py` (synthetic fixture attr).
+  Each now carries a one-line citation comment. The wedge mask continues to
+  use the *horizon* slope rather than the FoV slope, which is the configuration
+  Pober et al.'s buffer was calibrated against.
+
+  **Downstream:** the fraction of modes outside the wedge and the total
+  cross-correlation SNR both decrease; any previously quoted values (e.g. the
+  26.2 % / 0.1 σ figures in `docs/project_update.md`) predate this change and
+  need regenerating.
+- **`README.md`** — parameter table entry for the wedge buffer now states the
+  value in both $\mathrm{Mpc}^{-1}$ and $h\ \mathrm{Mpc}^{-1}$ with its source;
+  Pober et al. (2014) and Parsons et al. (2012a) added to the reference list.
+
 <!-- ─── Mass resolution reporting, 2026-08-05 ───────────────────────────── -->
 
 ### Added

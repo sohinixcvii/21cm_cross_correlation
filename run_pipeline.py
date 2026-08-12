@@ -323,7 +323,8 @@ def observational_stage(
     outside_wedge = analysis.foreground_wedge_mask(
         spectra.k_perp, spectra.k_parallel,
         slope=horizon_slope,
-        buffer=data.get("wedge_buffer", 0.02),
+        # 0.1 h Mpc^-1 (Pober et al. 2014 "moderate"; 21cmSense default)
+        buffer=data.get("wedge_buffer", 0.0677),
     )
 
     # ── Noise and SNR ─────────────────────────────────────────────────────

@@ -148,7 +148,8 @@ bandwidth          = 8e6         # per-band bandwidth  [Hz]  (8 MHz)
 # ---------------------------------------------------------------------------
 #  Foreground wedge
 # ---------------------------------------------------------------------------
-wedge_buffer = 0.02              # safety margin beyond horizon line  [Mpc^-1]
+# 0.1 h Mpc^-1 at h = 0.6766 (Pober et al. 2014 "moderate"; 21cmSense default)
+wedge_buffer = 0.0677            # safety margin beyond horizon line  [Mpc^-1]
 
 # ---------------------------------------------------------------------------
 #  Power spectrum binning
