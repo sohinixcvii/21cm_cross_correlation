@@ -324,7 +324,7 @@ A refactored version of notebook 3 split into three independent parts for cluste
 | $z_\mathrm{obs}$ | 7.0 | Reference redshift (midpoint) |
 | `minimum_los_slices` | 100 | Floor on $N_z$, overriding the cell-size-matched value |
 | $M_\mathrm{UV}$ limit | $< -18$ | Euclid galaxy selection (bright end $-22$) |
-| $\sigma_z$ | 0.059 | Euclid photo-$z$ uncertainty |
+| $\sigma_z$ | **0.45** | Euclid photo-$z$ uncertainty — **absolute**, not $\sigma_z/(1+z)$. Equals $\sigma_z/(1+z) = 0.056$ at $z=7$, consistent with the Euclid requirement $< 0.05$. Was 0.059 (the fractional value used as if absolute), which understated $\sigma_r$ by $\sim 7.6\times$ |
 | $\bar{n}_\mathrm{gal}$ | $3\times10^{-3}\ h^3\ \mathrm{Mpc}^{-3}$ | Mean galaxy number density |
 | $b_\mathrm{gal}$ | 8 | Fallback only; overwritten by the halo-catalogue estimate ($\approx 4.7$) |
 | $t_\star$ | 0.5 | SFR timescale as a fraction of $t_H(z)$ — 570 Myr at $z=7$ |

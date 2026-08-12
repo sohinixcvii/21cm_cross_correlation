@@ -145,6 +145,11 @@ def write_tiny_simulation(
         f.attrs["galaxy_bias"] = 8.0
         f.attrs["beta_rsd"] = 0.12
         f.attrs["mean_galaxy_density"] = 3e-3
+        # Deliberately NOT the production value (0.45). This is a 64 Mpc box
+        # with L_los = 100 Mpc; sigma_z = 0.45 gives sigma_r = 157 Mpc, larger
+        # than the box, so the photo-z kernel underflows to zero in every bin
+        # and the damping/SNR tests would exercise all-zero data. 0.059 keeps
+        # the fixture well conditioned.
         f.attrs["photoz_uncertainty"] = 0.059
         f.attrs["M_UV_limit"] = -18
         f.attrs["OMEGA_M_0"] = 0.315

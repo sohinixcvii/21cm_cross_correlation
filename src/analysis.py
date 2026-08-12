@@ -509,7 +509,10 @@ def radial_smearing_length(
     Parameters
     ----------
     photoz_uncertainty : float
-        Photometric redshift uncertainty σ_z.
+        Photometric redshift uncertainty σ_z, **absolute — not σ_z/(1+z)**.
+        Surveys usually quote the fractional form, so multiply by (1 + z)
+        before passing it here: Euclid's σ_z/(1+z) < 0.05 requirement means
+        σ_z ≈ 0.4 at z = 7, not 0.05.
     z_obs : float
         Reference redshift.
     hubble_constant : float, optional

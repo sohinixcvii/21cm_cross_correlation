@@ -1029,7 +1029,7 @@ def plot_snr(
 
     fig.suptitle(
         rf"HERA $\times$ Euclid — lightcone $z = {data.z_min}$–${data.z_max}$   "
-        rf"($\sigma_z = {data.get('photoz_uncertainty', 0.059)}$)",
+        rf"($\sigma_z = {data.get('photoz_uncertainty', 0.45)}$)",
         fontsize=13,
     )
     return fig

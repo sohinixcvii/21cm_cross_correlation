@@ -116,7 +116,13 @@ z_max = 7.005          # farthest redshift (high-z end)
 #  Euclid-like survey parameters
 # ---------------------------------------------------------------------------
 M_UV_limit          = -18    # UV absolute magnitude cut
-photoz_uncertainty  = 0.059  # sigma_z photometric redshift error
+# sigma_z is the *absolute* photometric redshift error, not sigma_z/(1+z):
+# radial_smearing_length() computes sigma_r = c sigma_z / H(z) directly.
+# 0.45 at z_obs = 7 corresponds to sigma_z/(1+z) = 0.056, consistent with the
+# Euclid photometric requirement sigma_z/(1+z) < 0.05. The previous value of
+# 0.059 was the fractional quantity used as if it were absolute, which
+# understated sigma_r by a factor ~7.6.
+photoz_uncertainty  = 0.45   # sigma_z photometric redshift error (absolute)
 mean_galaxy_density = 3e-3   # n_bar  [h^3 Mpc^-3]
 
 # ---------------------------------------------------------------------------

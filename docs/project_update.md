@@ -101,7 +101,7 @@ bias-derived quantities change (§4).
 | Parameter | Value |
 |---|---|
 | UV magnitude window | −22 ≤ M_UV ≤ −18 (AB mag) |
-| Photo-z uncertainty | σ_z = 0.059 |
+| Photo-z uncertainty | **σ_z = 0.45** (absolute, not σ_z/(1+z); was 0.059 — corrected 2026-08-12, see `docs/HPC.md` §11.8) |
 | Target galaxy number density | n̄ = 3 × 10⁻³ h³ Mpc⁻³ |
 | Halos in the window *(superseded run)* | **49,315** |
 | Halos brighter than −18, no bright cut | 49,621 |
@@ -265,7 +265,7 @@ applied to a regenerated `galaxy_overdensity`.
 |---|---|
 | Mean neutral fraction ⟨x_HI⟩ | 0.176 |
 | Large-scale cross-spectrum mean | −5.644 × 10³ (anti-correlated ✓) |
-| Photo-z smearing σ_r | 20.6 Mpc |
+| Photo-z smearing σ_r | 20.6 Mpc (**157.5 Mpc** at the corrected σ_z = 0.45) |
 | Horizon wedge slope | 3.151 |
 | HERA FoV wedge slope | 0.379 |
 | Modes outside the wedge | 105 / 400 (26.2 %) |

@@ -7,6 +7,103 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── UV coefficient audit + HDF5 attr patch, 2026-08-12 ──────────────── -->
+
+### Verified (no change required)
+- **Mass-to-light coefficient in the galaxy-bias path audited — already
+  correct.** `run_simulation.py:575` `uv_luminosity()` carries no hardcoded
+  coefficient; it delegates to `src.conversions.sfr_to_Luv`, which returns
+  `sfr / kappa_uv` with $\kappa_\mathrm{UV} = 1.15\times10^{-28}$, i.e.
+  multiplication by **8.6957 × 10²⁷** = $1/1.15\times10^{-28}$ exactly
+  (Madau & Dickinson 2014). The erroneous literal `1.15e28` appears nowhere in
+  the codebase — that discrepancy was already removed by the 2026-08-04
+  κ_UV/AB-zero-point unification (see the entry further down this file).
+- **Scope correction for the record:** `uv_luminosity()` belongs to the
+  *analytic HMF cross-check* branch, which sets `galaxy_bias_hmf_analytic`
+  (5.39, **not adopted**). The "Estimating galaxy bias from the perturbed halo
+  catalogue" step — the one that sets the adopted `b_g` — is a separate branch
+  calling `select_euclid_halos` → `Luv_to_Muv(sfr_to_Luv(...))`
+  (`src/analysis.py:865`). Both route through the same shared helper. Had the
+  coefficient been wrong it would have moved only the cross-check: measured
+  counterfactually, `1.15e28` gives $b_g^\mathrm{analytic}$ 5.3875 → 5.1962
+  (−3.6 %, not the naive 1.32×, because the coefficient shifts the selection's
+  mass threshold where $b_h(M)$ varies slowly).
+- **Adopted galaxy bias re-measured from the stored 114,291,212-halo
+  catalogue** with current code, avoiding a multi-hour re-simulation:
+  **$b_g = 4.744191$** (49,315 halos selected, range 2.826 – 9.142,
+  SFR window 0.79561 – 31.674 M☉ yr⁻¹), $f = 0.997672$,
+  **$\beta = f/b_g = 0.210293$**. Unchanged from the recorded 4.744 / 0.2103 —
+  no downstream numbers need updating.
+
+### Changed
+- **`outputs/lightcone_data.h5` — two root attributes patched in place**
+  (data untouched, file still 2.76 GB): `photoz_uncertainty` 0.059 → **0.45**
+  and `wedge_buffer` 0.02 → **0.0677**, so the analysis stage picks up both
+  corrections without re-simulating. A provenance string is stored in the new
+  `attrs_patched` attribute. `galaxy_bias` (33.3889) and `beta_rsd` (0.029880)
+  were **deliberately not patched** — the stored `galaxy_overdensity` field
+  carries that Kaiser boost, so the attributes still correctly describe the
+  field on disk; patching them would make the file internally inconsistent.
+  Full correctness still requires `bash submit_job.sh --sim force`.
+
+  **Post-patch pipeline output:** $\sigma_r$ = **157.478 Mpc**, modes outside
+  wedge **97/400 = 24.25 %**, total SNR **1.06 × 10⁻¹¹¹ σ** (numerically zero).
+  Patching bumps the file mtime, so the spectra cache is recomputed (~0.6 s);
+  the spectra are unchanged (large-scale $P_\times$ mean still −5.644 × 10³).
+- **`docs/HPC.md`** — §11.7 rewritten for the partial-patch state, with the
+  post-patch numbers and the unchanged $b_g$/$\beta$ measurement.
+
+<!-- ─── Photo-z uncertainty convention, 2026-08-12 ──────────────────────── -->
+
+### Fixed
+- **Photometric redshift uncertainty: $\sigma_z\ 0.059 \to 0.45$
+  (science-affecting).** `src.analysis.radial_smearing_length` computes
+  $\sigma_r = c\,\sigma_z / H(z)$, which requires an **absolute** $\sigma_z$.
+  The configured 0.059 was the *fractional* quantity $\sigma_z/(1+z)$ that
+  surveys actually quote, used as if it were absolute — understating the
+  radial smearing by a factor $(1+z) = 8$ at $z_\mathrm{obs} = 7$. The adopted
+  0.45 corresponds to $\sigma_z/(1+z) = 0.056$, consistent with the Euclid
+  photometric requirement $\sigma_z/(1+z) < 0.05$ (which gives 0.40 at $z=7$).
+
+  **Downstream at $z_\mathrm{obs} = 7$:**
+
+  | Quantity | 0.059 (old) | 0.45 (current) |
+  |---|---|---|
+  | $\sigma_r$ | 20.65 Mpc | **157.48 Mpc** |
+  | $W$ at the smallest bin $k_\parallel = 0.0176\ \mathrm{Mpc}^{-1}$ | 0.936 | **0.021** |
+  | $W$ at the first mode the wedge admits (0.1118) | 0.070 | $5\times10^{-68}$ |
+  | $k_\parallel$ where $W = 0.5$ | 0.0574 Mpc⁻¹ | **0.0075 Mpc⁻¹** |
+  | Total SNR (cached spectra, current buffer) | 0.0048 σ | **0.0000 σ** |
+
+  The half-power scale now sits *below* the smallest $k_\parallel$ the box can
+  sample, and would need $L_\mathrm{LOS} > 840$ Mpc to reach. Combined with the
+  wedge this leaves no usable modes at all: the wedge admits only
+  $k_\parallel > 0.1118\ \mathrm{Mpc}^{-1}$, where the kernel is
+  $\sim 10^{-68}$. This is physical, not a bug — a photometric survey with
+  $\sigma_z = 0.45$ at $z = 7$ retains essentially no LOS information. Any
+  forecast must use spectroscopic redshifts, a box large enough to sample
+  $k_\parallel \to 0$, or the angular (2D) cross-correlation.
+
+  **Call sites updated:** `run_simulation.py` (config, also written to the
+  HDF5 root attrs), `run_pipeline.py` (`data.get` fallback), `src/figures.py`
+  (figure-label fallback), and the docstring of
+  `src.analysis.radial_smearing_length`, which now states the absolute-vs-
+  fractional convention explicitly — the ambiguity that caused this.
+  **Deliberately not updated:** `tests/conftest.py` keeps 0.059 (its 64 Mpc
+  synthetic box with $L_\mathrm{los} = 100$ Mpc would give a kernel that
+  underflows to zero in every bin, making the damping and SNR tests vacuous);
+  a comment there records why. `21cmfast_HERAxEuclid_lightcone.ipynb` still
+  hardcodes 0.059 in its own config cell and is **not** covered by this fix.
+
+  **Not yet in effect:** `run_pipeline.py` reads `photoz_uncertainty` from the
+  HDF5 root attrs, so the stored `outputs/lightcone_data.h5` (written
+  2026-06-15, $\sigma_z = 0.059$) keeps the old value until
+  `bash submit_job.sh --sim force`. The same holds for `wedge_buffer` and
+  `galaxy_bias`.
+- **`README.md`, `docs/HPC.md`, `docs/project_update.md`** — $\sigma_z$ tables,
+  the $\sigma_r$ evaluation, the photo-$z$ kernel table, and the wedge/photo-z
+  conflict discussion updated. Test suite: 76 passed.
+
 <!-- ─── HPC run specification, 2026-08-12 ───────────────────────────────── -->
 
 ### Added

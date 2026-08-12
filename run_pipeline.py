@@ -303,7 +303,9 @@ def observational_stage(
 
     # ── Photo-z damping ───────────────────────────────────────────────────
     radial_smearing = analysis.radial_smearing_length(
-        photoz_uncertainty=data.get("photoz_uncertainty", 0.059),
+        # Absolute sigma_z (not sigma_z/(1+z)); 0.45 at z = 7 matches the
+        # Euclid requirement sigma_z/(1+z) < 0.05.
+        photoz_uncertainty=data.get("photoz_uncertainty", 0.45),
         z_obs=z_obs, **cosmology,
     )
     kernel = analysis.photoz_damping_kernel(spectra.k_parallel, radial_smearing)
