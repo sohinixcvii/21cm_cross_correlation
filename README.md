@@ -125,6 +125,7 @@ The HDF5 file `outputs/lightcone_data.h5` stores all simulation fields (compress
 | Document | Contents |
 |----------|----------|
 | [`PIPELINE.md`](PIPELINE.md) | HPC pipeline summary, Mermaid flowchart, stage table, and the `lightcone_data.h5` schema |
+| [`docs/HPC.md`](docs/HPC.md) | **Parameter-level ground truth for the HPC run** — every configuration value, derived quantity, formula with its evaluated number at $z=7$, file written, disk footprint, and known inconsistency |
 | [`CHANGELOG.md`](CHANGELOG.md) | Chronological record of all changes, including corrected literature values |
 | [`TODO.md`](TODO.md) | Outstanding work, priority-ordered — **including the lightcone power-spectrum corrections the Δz = 1.0 range now requires** |
 | [`docs/INSTALL_21cmFASTv4.md`](docs/INSTALL_21cmFASTv4.md) | Step-by-step 21cmFAST v4.1.1 install on CSD3/HPC, plus fixes for quota, conda-plugin, and FFTW linking failures |

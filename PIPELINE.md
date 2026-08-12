@@ -165,8 +165,11 @@ Simulation geometry, ⟨x_HI⟩, the large-scale cross-spectrum sign, photo-$z$
 smearing σ_r, both wedge slopes, the fraction of modes outside the wedge,
 noise levels, the total SNR, the Euclid selection counts, and ⟨b_g⟩.
 
-See `README.md` for the full science background and equation references, and
-`docs/project_update.md` for the latest run's numerical results.
+See `README.md` for the full science background and equation references,
+`docs/HPC.md` for the complete parameter-level specification of the run (every
+configuration value, evaluated formula, output file, and known
+inconsistency), and `docs/project_update.md` for the latest run's numerical
+results.
 
 > **Regenerate the stored HDF5 before trusting any numbers.** As of
 > 2026-08-04 the galaxy-bias calculation is corrected: any

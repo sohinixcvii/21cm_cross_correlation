@@ -7,6 +7,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── HPC run specification, 2026-08-12 ───────────────────────────────── -->
+
+### Added
+- **`docs/HPC.md` — complete parameter-level specification of the HPC run.**
+  A single reference covering: the conda environment and pinned
+  `py21cmfast 4.1.1` stack; every `submit_job.sh` setting and every
+  `run_pipeline.py` flag with its default; the full `run_simulation.py`
+  configuration block; the `"simple"` template's `AstroParams`,
+  `MatterOptions`, and `AstroOptions` as actually instantiated in the
+  environment (`SOURCE_MODEL = CHMF-SAMPLER`, `USE_TS_FLUCT = False`,
+  `SAMPLER_MIN_MASS = 1e8 M☉`, `N_THREADS = 1`); the derived geometry and mass
+  resolution; every analysis formula with its **evaluated value at
+  $z_\mathrm{obs} = 7$** ($t_\mathrm{sf} = 570.3$ Myr, $\sigma_r = 20.647$ Mpc,
+  horizon slope 3.1509, FoV slope 0.37936, $T_\mathrm{sys} = 328.6$ K,
+  $P_{N,21} = 3.7488$ mK² Mpc³, $P_{N,\mathrm{gal}} = 333.33$ Mpc³,
+  Euclid window ↔ SFR 0.7956–31.674 M☉ yr⁻¹); the disk footprint; and a
+  one-page reference table of every number.
+
+  **New quantitative findings recorded there:**
+  - **`L_los` is recorded as 200.0 Mpc while `lc_dist_Mpc` spans 3.4999 Mpc**
+    (slice spacing 0.035385 Mpc) — a factor **56.5** disagreement. The
+    attribute comes from `lightcone.lightcone_dimensions[2]`, which is
+    $N_z \times$ the *transverse* cell size, and it propagates into
+    $\Delta k_\parallel = 2\pi/200$, the wedge mask, the photo-$z$ kernel
+    argument, and the Kaiser $\mu$ grid. Previously described in the changelog
+    as "200 Mpc after rounding to cell boundaries"; the slice distances show it
+    is not a rounding effect. Not currently tracked in `TODO.md`.
+  - **Wedge-buffer change quantified end to end.** Recomputed from the cached
+    spectra: $0.02 \to 0.0677\ \mathrm{Mpc}^{-1}$ moves the outside-wedge mode
+    count from 105/400 (26.2 %) to **97/400 (24.2 %)** and the total SNR from
+    0.0629 σ to **0.0048 σ** — a **13×** drop from only 8 lost bins, because
+    those bins are the low-$k_\parallel$ ones the photo-$z$ kernel had not yet
+    damped.
+  - **Wedge vs photo-$z$ conflict made explicit.** At the smallest
+    $k_\perp = 0.0140\ \mathrm{Mpc}^{-1}$ the wedge admits only
+    $k_\parallel > 0.1118\ \mathrm{Mpc}^{-1}$, where $W = 0.070$ — every
+    surviving mode is damped to ≤ 7 % of its amplitude.
+  - **21cmFAST cache footprint: ~56 GB** in the gitignored
+    `d1f8b93ecb5e05f9040e32ca2a1534a2/` directory at the project root
+    (920 MB `InitialConditions.h5` + **~3.6 GB per node redshift**: 18 GB for
+    the 5 smoke-test nodes, 36 GB for the 10 nodes of the briefly-set
+    production range). This dominates the 2.76 GB of `outputs/` and is the
+    quantity to size a scratch quota against.
+  - Minor: the wedge buffer is converted at $h = 0.6766$ while the run's own
+    `HUBBLE_CONSTANT = 67.36` implies $h = 0.6736$ (0.4 % difference).
+  - The stored `lightcone_data.h5` carries 25 root attributes — 9 fewer than
+    the 34 the current script writes.
+
+### Changed
+- **`README.md`** — `docs/HPC.md` added to the documentation table.
+- **`PIPELINE.md`** — closing pointer now directs to `docs/HPC.md` for the
+  parameter-level specification.
+
 <!-- ─── Foreground wedge buffer, 2026-08-07 ─────────────────────────────── -->
 
 ### Changed
