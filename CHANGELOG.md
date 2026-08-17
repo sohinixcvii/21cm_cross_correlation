@@ -7,6 +7,303 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Notebook galaxy-bias cell debugged, 2026-08-17 ──────────────────── -->
+
+### Fixed
+
+- **The analytic galaxy-bias cell of `21cmfast_HERAxEuclid_lightcone.ipynb`
+  carried four bugs.** It now mirrors `run_simulation.py` §4's
+  "Fallback / cross-check: analytic HMF integral" and imports every
+  conversion from `src/`. **`b_g` 33.66 → 5.39**, which is where high-$z$ LBGs
+  at $M_\mathrm{UV} < -18$ should sit.
+
+  | # | Bug | Effect |
+  |---|---|---|
+  | 1 | **`Muv_to_Luv` was used but never defined or imported anywhere in the notebook** | `NameError` on any clean kernel — the cell could only ever have run against a name left over from a deleted cell or an earlier session |
+  | 2 | `sfr()` divided stellar mass by a **hardcoded 1e8 yr** | 21cmFAST's own timescale is $t_\mathrm{STAR}\,t_H(z) = 570.3$ Myr at $z = 7$, so every SFR was **5.70× too high** — 1.89 mag too bright. Exactly the failure `star_formation_timescale`'s docstring warns about |
+  | 3 | `uv_luminosity()` computed `1.15e28 * sfr` | $\kappa_\mathrm{UV} = 1.15\times10^{-28}$ enters as $L = \mathrm{SFR}/\kappa$, i.e. $\times 8.696\times10^{27}$. **1.32× too luminous** |
+  | 4 | local `sheth_tormen_bias_from_nu` used `a * nu**2` on `mf.nu` | `hmf` stores `nu` **already squared**, so this formed $\nu^4$. $b_h(\nu^2{=}10)$ came out **42.4 instead of 4.73** — the dominant cause of the implausible $b_g \approx 33$ |
+
+  Bugs 2–4 all pushed in the same direction, which is why the error was large
+  but the cell never looked obviously broken.
+
+- **Three name collisions removed.** The cell bound `sfr`, `selected`,
+  `stellar_mass` and `L_UV` — all of which the UV-selection cells below use for
+  **per-halo catalogue arrays**. Only top-to-bottom execution order was hiding
+  it; re-running this cell after them (what one does while tuning the $M_UV$
+  limits) would silently replace a 114-million-element array with a
+  300-element one. Renamed to `sfr_model`, `selected_mass_bins`,
+  `stellar_mass_model`, `L_UV_model`, following `run_simulation.py`.
+
+- **Caveats now printed rather than implied**: `hmf`'s $M_\odot/h$ and
+  $h^3$ Mpc⁻³ conventions against a stellar-halo relation written in $M_\odot$;
+  `MassFunction()` using `hmf`'s default cosmology rather than the notebook's;
+  this being the scatter-free estimate that the pipeline does *not* prefer; and
+  the stored `galaxy_bias = 33.389` attribute in `lightcone_data.h5`, which
+  still correctly describes the stored `galaxy_overdensity` field and so was
+  deliberately left unpatched.
+
+### Verified
+
+- The rewritten cell **executes from a clean namespace** (previously
+  impossible, bug 1) and reproduces the pipeline's analytic branch exactly:
+  $b_g = 5.3944$, $n_\mathrm{gal} = 2.394\times10^{-3}\ h^3$ Mpc⁻³, 62 of 300
+  mass bins selected, $M_h \in [3.31\times10^{10}, 5.50\times10^{11}]\ M_\odot/h$.
+- It leaves `L_UV`, `sfr`, `selected` and `stellar_mass` unbound, confirmed by
+  introspection after execution.
+- Suite still **99 passing**; the budget chain still bit-identical to
+  `run_pipeline.py`; notebook valid under `nbformat`.
+
+### Consequence not yet propagated
+
+`beta_rsd = f / b_g` and the stored `galaxy_overdensity` field were built with
+$b_g = 33.389$. With $b_g = 5.39$, $\beta$ rises from 0.0299 to **0.185** and
+the maximum Kaiser boost from 1.03× to **1.19×**. Propagating this needs
+`--sim force`; until then `lightcone_data.h5` and every number derived from it
+still carry the old bias. Not yet tracked in `TODO.md`.
+
+<!-- ─── Notebook aligned with the pipeline, 2026-08-17 ──────────────────── -->
+
+### Changed
+
+- **`21cmfast_HERAxEuclid_lightcone.ipynb` now imports the pipeline's code
+  instead of duplicating it.** Seven cells rewritten; roughly 190 lines of
+  reimplemented physics deleted. The notebook and `run_pipeline.py` now execute
+  the same functions, so they cannot drift apart.
+
+  | Notebook cell | Was | Now |
+  |---|---|---|
+  | imports | `sfr_to_Luv` only | + `hubble_parameter`, `comoving_distance`, `compute_all_power_spectra`, `compute_uncertainty_budget`, `horizon_wedge_slope`, `fov_wedge_slope` |
+  | derived quantities | local `hubble_parameter` def | imported, called with the configured cosmology explicitly |
+  | power spectra | a ~100-line local copy of `compute_cylindrical_cross_power` | `compute_all_power_spectra(...)` |
+  | wedge geometry | longhand slope through $\lambda_\mathrm{obs}$ | `horizon_wedge_slope` / `fov_wedge_slope` |
+  | photo-$z$ + wedge | inline kernel, mask, `quad` call | one `compute_uncertainty_budget(...)` call |
+  | SNR map | inline $T_\mathrm{sys}$, $P_N$, $\sigma$, SNR | read off the returned `UncertaintyBudget` |
+
+- **Three notebook bugs fixed**, all found by the audit recorded below:
+  - `Hz_obs = Planck18.H(z).value` referenced **`z`, a stale loop variable**,
+    where `z_obs` was meant. Now `hubble_parameter(z_obs, HUBBLE_CONSTANT, OMEGA_M_0)`.
+    (It fed only a figure overlay, so no published number depended on it.)
+  - The noise cell hardcoded `1.42e9` while the notebook's own config defines
+    `F_21_HZ = 1420.405e6` — a 0.10 % shift in $P_{N,21}$. The literal is gone.
+  - `wedge_buffer` 0.02 → **0.0677 Mpc⁻¹** and `photoz_uncertainty`
+    0.059 → **0.45**, matching the pipeline, each with its provenance in a
+    comment.
+
+- **Cosmology reverted to literal `67.36` / `0.315`** in the configuration
+  cell, matching `run_simulation.py:136-137` and hence the `HUBBLE_CONSTANT` /
+  `OMEGA_M_0` attributes of `lightcone_data.h5` that `run_pipeline.py` reads.
+  The uncommitted `Planck18.Om0` / `Planck18.H0.value` edit (67.66 / 0.30966)
+  is undone; `Planck18` is retained for the comoving-distance **endpoints**
+  only, exactly as `run_simulation.py` §1 does. **Side effect:** because this
+  restores the cosmology the notebook's last real execution used, the stored
+  outputs of every *untouched* cell remain valid.
+
+- **Markdown updated** to match: the photo-$z$/wedge section is now a full
+  four-step derivation of the budget including the $T_0(z)$ cancellation
+  algebra and the sample-variance / noise-coupling split; the power-spectrum
+  section states the estimator and flags the unused `mode_counts`; the summary
+  gained a table mapping each concern to the `src/` function that implements
+  it, and a table of every parameter that changed with the reason.
+
+### Verified
+
+- **The rewritten cells execute, and agree with the pipeline exactly.** Cells
+  2, 4, 6, 24, 26, 28 and 30 were run headlessly against
+  `outputs/lightcone_data.h5` (the 21cmFAST cells cannot run outside a full
+  simulation, so the fields were injected) and compared to
+  `run_pipeline.observational_stage` on the same data:
+  $\sigma_r$, horizon slope, FoV slope, $P_{N,21}$, $P_{N,\mathrm{gal}}$, the
+  surviving mode count, the per-mode SNR map, and the total
+  ($1.0574485217836499\times10^{-111}$) are all **bit-identical**.
+- **`src/figures.py` deliberately not imported** by the notebook: it calls
+  `matplotlib.use("Agg")` at import, which would silently disable inline
+  plotting. `fill_nan_nearest` therefore stays defined locally — the one piece
+  of duplication left, and it is display-only.
+
+### Note for the next run
+
+Outputs of the seven rewritten cells were **cleared**, not regenerated —
+producing them requires a full 21cmFAST lightcone run. Re-execute the notebook
+top to bottom to repopulate them. The numbers it will print for the budget are
+already known and recorded in `docs/uncertainty_budget.md` §8, since they do
+not depend on the simulated fields.
+
+<!-- ─── Uncertainty budget incorporated into the pipeline, 2026-08-17 ───── -->
+
+### Verified (no change required)
+
+- **The pipeline's transcription of the notebook's uncertainty budget is
+  numerically exact.** Every term of the photo-$z$ / wedge / noise / SNR chain
+  in `21cmfast_HERAxEuclid_lightcone.ipynb` (its "Photo-z Radial Smearing &
+  Foreground Wedge Mask" and "Cross-correlation SNR map" cells) was
+  transcribed verbatim and compared against `src/analysis.py` on the
+  notebook's own grid (256 × 350.6 Mpc, 128² × 175, 20 × 20 log bins).
+  **Bit-identical**: $\sigma_r$, $W(k_\parallel)$, the wedge mask (identical
+  boolean array), $P_\times^\mathrm{obs}$, $P_\mathrm{gal}^\mathrm{obs}$,
+  $\sigma_{21}$, $\sigma_\mathrm{gal}$, $\sigma_\times$, the per-mode SNR, and
+  the total. The horizon and FoV slopes agree to $2\times10^{-16}$ relative —
+  the notebook writes the slope the long way round through
+  $\lambda_\mathrm{obs}$, which reduces algebraically to $D_c H/[c(1+z)]$.
+  Now locked by `test_budget_reproduces_the_notebook_chain`.
+
+- **The missing $T_0(z)$ factors are correct to omit.** La Plante Eqs. 15–17
+  carry $\sigma_{21} = (P_{21}+P_{N,21})/T_0^2$ and
+  $\mathrm{SNR} = |P_\times/T_0|/\sigma_\times$; neither the notebook nor the
+  pipeline carries them. They **cancel exactly** in the ratio, so the SNR is
+  unaffected. They do *not* cancel in $\sigma_\times$ itself, so it must not be
+  quoted as a standalone error bar without reinstating $T_0$ — recorded in the
+  `cross_power_snr` docstring and `docs/uncertainty_budget.md` §2.5.
+
+- **The notebook's stored outputs predate its own configuration cell.** Its
+  printed $D_c = 8821$ Mpc, $m = 3.151$, $\sigma_r = 20.6$ Mpc reproduce
+  exactly under $H_0 = 67.36$, $\Omega_{m,0} = 0.315$ — but its (uncommitted)
+  config cell now reads `Planck18.Om0` / `Planck18.H0.value` (0.30966 / 67.66),
+  which would give 8835 Mpc, 3.1429, 20.73 Mpc. **The notebook has not been
+  re-executed since that edit.** Its `Hz_obs` cell also carries a live bug —
+  `Planck18.H(z).value` references `z`, a stale loop variable, where `z_obs` is
+  meant; that value feeds only a figure overlay, and the wedge-mask cell
+  recomputes $H(z_\mathrm{obs})$ correctly, so no science number depends on it.
+  The pipeline reads cosmology from the HDF5 root attributes and is therefore
+  always self-consistent with the run it describes.
+
+### Added
+
+- **`src/analysis.py` — `compute_uncertainty_budget` and `UncertaintyBudget`.**
+  A single entry point for the whole chain (damping → wedge → noise → variance
+  → SNR), returning a dataclass that holds every intermediate term plus derived
+  summaries (`total_snr`, `fraction_outside_wedge`, `cosmic_variance_fraction`,
+  `detected`, `as_dict()`). The notebook and the HPC run now execute the same
+  code path.
+- **The two halves of Eq. 15 are now separated.** `SNRResult` gained
+  `sigma_21cm`, `sigma_galaxy`, `cosmic_variance_term`
+  ($\tfrac12 P_\times^2$) and `noise_coupling_term`
+  ($\tfrac12\sigma_{21}\sigma_\mathrm{gal}$) — the split that makes this a
+  *budget* rather than one error bar, and the basis of the new
+  `cosmic_variance_fraction` diagnostic. **For the stored run it is
+  $2\times10^{-224}$**: the measurement is entirely noise dominated, because
+  photo-$z$ damping has erased $P_\times$ wherever the wedge admits it.
+- **`analysis.system_temperature(z, f_21_hz)`** returning $(T_\mathrm{sys}, \nu_\mathrm{obs})$,
+  with the model's constants named — `T_RECEIVER_K` (100 K),
+  `T_SKY_300MHZ_K` (60 K), `SKY_SPECTRAL_INDEX` (2.55), and
+  `NOISE_NORMALISATION_MPC3` ($10^3$). The last is **not** a physical
+  constant: it supplies the Mpc³ that $T_\mathrm{sys}^2/(t\Delta\nu)$ lacks,
+  standing in for the per-mode survey volume La Plante Eq. 11 computes
+  properly. It was previously an unnamed inline literal in both notebook and
+  pipeline.
+- **Four CLI overrides** on `run_pipeline.py`: `--sigma-z`, `--wedge-buffer`,
+  `--integration-time`, `--bandwidth`. Each resolves CLI → HDF5 attribute →
+  default. None affects the simulated fields, so all can be swept from cached
+  spectra in seconds. `python run_pipeline.py --sigma-z 0.059 --wedge-buffer 0.02`
+  reproduces the notebook's configuration without editing anything.
+- **The budget is now persisted**, not discarded: `save_uncertainty_budget` /
+  `load_uncertainty_budget` write an `uncertainty_budget` group into
+  `outputs/analysis_products.h5` (10 maps + 21 scalar attrs), appended
+  alongside the cached spectra and replaced in place on recomputation.
+- **`figures.plot_uncertainty_budget`** and the `budget` plot group: the
+  damping kernel against the lowest $k_\parallel$ the wedge admits, the
+  $\sigma_\times$ map, and the sample-variance share per mode. It shows §7.1
+  directly — the kernel is below $10^{-26}$ before the wedge floor is reached.
+- **`docs/uncertainty_budget.md`** — the full reference: every formula with its
+  provenance and evaluated number at $z = 7$, the audit table, the three
+  discrepancies, the parameter/override table, the HDF5 schema, and five known
+  limitations.
+- **23 tests** (16 in `tests/test_uncertainty_budget.py`, plus CLI and figure
+  coverage). Suite: **76 → 99 passing**.
+
+### Changed
+
+- **`run_pipeline.observational_stage` now contains no physics.** It resolves
+  parameters and calls `compute_uncertainty_budget` once; the inline
+  transcription it used to hold is gone. Verified behaviour-preserving against
+  the stored run: total SNR `1.0574485217836499e-111`, $\sigma_r$ 157.478 Mpc,
+  horizon slope 3.150906 — identical to the values in the previous
+  `pipeline_summary.json`.
+- **`pipeline_summary.json`** gained the `uncertainty_budget` block (21
+  scalars). The former `observation` block is **retained as an alias** of its
+  eight values, so existing notes and scripts keep working.
+- **`print_report`** now prints the budget as four labelled lines — photo-$z$,
+  wedge, noise, variance split — instead of two bare numbers.
+- **`docs/HPC.md`** — §3.1 gained the four flags, §5.2 a pointer to the new
+  document, §5.5 the variance split and the $T_0$ cancellation, §6/§7/§8 the
+  new figure, JSON block, and file sizes; §11.4 now records that the notebook
+  omits the mode-count factor too (so matching it is faithful, not a porting
+  error), and §11.5 names the $10^3$ normalisation.
+- **`README.md`, `PIPELINE.md`** — documentation table, output inventory, and
+  the `analysis_products.h5` schema updated.
+
+### Known, unchanged
+
+- `mode_counts` is still not divided into the variance. The **notebook does
+  not apply it either**, so the pipeline matching it is a faithful port; the
+  quoted total SNR is a per-bin quadrature sum and therefore conservative.
+  (`TODO.md` §P1.1.)
+- The thermal noise is still $k$-independent. La Plante Eq. 11 with
+  $X^2Y\Omega'/n(k_\perp)$ exists in `21cm_galaxy_cross_uncertainty.ipynb` and
+  was deliberately **not** ported — out of scope for the HERAxEuclid notebook's
+  budget. (`TODO.md` §P1.2.)
+- The notebook's noise cell hardcodes `1.42e9` where its own config defines
+  `F_21_HZ = 1420.405e6`; the pipeline uses the precise value throughout,
+  moving $P_{N,21}$ by 0.10 % (3.752581 → 3.748786). Recorded in the
+  `hera_thermal_noise_power` docstring; not propagated.
+- `mean_galaxy_density` is still declared `h³ Mpc⁻³` and consumed as
+  $1/\bar n$ in Mpc³ — carried over from the notebook unchanged.
+
+<!-- ─── User-defined parameter requirements, 2026-08-13 ─────────────────── -->
+
+### Added
+- **`docs/HPC.md` §13 — user-defined parameter requirements.** A single
+  checklist of every parameter the user has to (or may) set for an HPC run,
+  **each with the file and line where it is set**:
+  - **§13.0** the four layers parameters live in (scheduler directives →
+    `submit_job.sh:26–33` → `run_pipeline.py` CLI → `run_simulation.py:82–170`)
+    and the fact that a value set in one layer does not propagate backwards.
+  - **§13.1** seven site-specific requirements (R1–R7) with no correct default:
+    the **absent `#SBATCH` directives** (`submit_job.sh`, insert after line 24),
+    `CONDA_ENV`, the **21cmFAST cache directory** (R3, see below), the
+    cwd-relative `OUTPUT_DIR`, the hardcoded `EMAIL_TO`, install-time
+    `PIP_CACHE_DIR`/`XDG_CACHE_HOME`, and `JOB_NAME`.
+  - **§13.2** the full config block by line number, plus the parameters that
+    are user-editable but sit **outside** it: `minimum_los_slices` (line 216),
+    `M_UV_bright` (line 492), `OMEGA_B_0` (line 558), `random_seed` (255),
+    the template name (253), `apply_rsds`/`include_dvdr_in_tau21` (278–279),
+    and `N_THREADS` (never set — one core regardless of what the scheduler
+    is asked for).
+  - **§13.3** the four CLI flags that matter on a cluster.
+  - **§13.4** which edits actually take effect and when — group A
+    (14 parameters read from the **HDF5 root attrs**, so a config-block edit
+    does nothing until `--sim force` or an in-place patch), group B (baked into
+    the stored `galaxy_overdensity`; re-simulation only), group C (live).
+  - **§13.5** eight consistency rules the code does not enforce, **§13.6** a
+    pre-flight checklist.
+  - Former §13 (References) renumbered to **§14**; no internal cross-reference
+    pointed at either number.
+### Verified (no change required)
+- **Where the 56 GB 21cmFAST cache actually comes from** (py21cmfast 4.1.1,
+  checked by introspection). `p21c.run_lightcone(**kwargs)` forwards to
+  `generate_lightcone`, whose `cache` argument defaults to
+  **`OutputCache(direc=Path('.'))`** — the *current working directory*, which
+  is why the hash directory lands in the project root. `run_simulation.py:275`
+  does not pass `cache`, and the user-level `p21c.config['direc']` (here
+  `~/21cmFAST-cache`, holding 2.2 GB of stale **v3** flat-named files) does
+  **not** govern this path. `compute_initial_conditions`,
+  `determine_halo_catalog`, and `perturb_halo_catalog` (§4.4) accept no cache
+  argument at all. Recorded as requirement R3 with the one-line fix
+  (`cache=p21c.OutputCache("<scratch>")`); §8's "written to the project root"
+  stands, now with its mechanism.
+
+- **Noted while auditing the parameter units:** `mean_galaxy_density` is
+  declared `h³ Mpc⁻³` (`run_simulation.py:126`) but consumed as
+  $P_{N,\mathrm{gal}} = 1/\bar n$ and reported in Mpc³ (§5.4). If the declared
+  $h³$ is meant literally the shot noise is low by $h^{-3} = 3.3\times$.
+  Recorded in §13.2 as unresolved; not yet tracked in `TODO.md`.
+
+### Changed
+- **`README.md`** — the `docs/HPC.md` row now points at §13 as the
+  parameter-setup checklist.
+- **`docs/HPC.md`** — header block gained a "setting up a run on a new
+  machine?" pointer to §13.
+
 <!-- ─── UV coefficient audit + HDF5 attr patch, 2026-08-12 ──────────────── -->
 
 ### Verified (no change required)

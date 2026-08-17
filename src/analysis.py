@@ -11,7 +11,9 @@ Pure computation used by ``run_pipeline.py`` (and previously inlined in
 2. Foreground-wedge geometry (horizon and HERA primary-beam lines)
 3. Euclid photometric-redshift damping along the line of sight
 4. Simplified HERA thermal noise, galaxy shot noise, and the per-mode SNR
-5. Euclid ``M_UV`` selection of the halo catalogue and the resulting
+5. The assembled uncertainty budget, :func:`compute_uncertainty_budget` —
+   the single entry point that chains 2–4 in the order the notebook does
+6. Euclid ``M_UV`` selection of the halo catalogue and the resulting
    effective galaxy bias
 
 Nothing here imports ``matplotlib`` or ``py21cmfast``; plotting lives in
@@ -57,9 +59,16 @@ __all__ = [
     "foreground_wedge_mask",
     "photoz_damping_kernel",
     "radial_smearing_length",
+    "system_temperature",
     "hera_thermal_noise_power",
     "cross_power_snr",
     "total_snr",
+    "compute_uncertainty_budget",
+    "UncertaintyBudget",
+    "T_RECEIVER_K",
+    "T_SKY_300MHZ_K",
+    "SKY_SPECTRAL_INDEX",
+    "NOISE_NORMALISATION_MPC3",
     "euclid_sfr_window",
     "select_euclid_halos",
     "effective_galaxy_bias",
@@ -581,6 +590,14 @@ class SNRResult:
         21 cm thermal noise power [mK^2 Mpc^3].
     P_noise_galaxy : float
         Galaxy shot noise power [Mpc^3].
+    sigma_21cm : ndarray
+        ``|P_21| + P_N,21`` — the 21 cm side of the La Plante Eq. 15 product.
+    sigma_galaxy : ndarray
+        ``|P_gal| + P_N,gal`` — the galaxy side of the same product.
+    cosmic_variance_term : ndarray
+        ``0.5 P_cross²``, the sample-variance half of ``σ_cross²``.
+    noise_coupling_term : ndarray
+        ``0.5 σ_21 σ_gal``, the noise half of ``σ_cross²``.
     """
 
     snr_per_mode: np.ndarray
@@ -589,6 +606,58 @@ class SNRResult:
     sigma_cross: np.ndarray
     P_noise_21cm: float
     P_noise_galaxy: float
+    sigma_21cm: Optional[np.ndarray] = None
+    sigma_galaxy: Optional[np.ndarray] = None
+    cosmic_variance_term: Optional[np.ndarray] = None
+    noise_coupling_term: Optional[np.ndarray] = None
+
+
+# ── Sky + receiver temperature model ───────────────────────────────────────
+# T_sys = T_rcvr + T_sky(ν), with the synchrotron sky scaled from 300 MHz.
+# These are the values the notebook inlines in its noise cell; naming them
+# keeps the pipeline and the notebook auditable against each other.
+T_RECEIVER_K = 100.0        # HERA receiver temperature [K]
+T_SKY_300MHZ_K = 60.0       # Galactic synchrotron sky at 300 MHz [K]
+SKY_SPECTRAL_INDEX = 2.55   # T_sky ∝ ν^-2.55
+
+# The notebook's noise expression is T_sys² × 1e3 / (t_int Δν).  T_sys² / (t Δν)
+# is dimensionless × mK², so this factor carries the [Mpc^3] that makes P_N
+# commensurate with the measured P_21 — i.e. it stands in for the survey
+# volume per mode that a full instrument model (X²YΩ'/n(k_perp)) would supply.
+# It is a normalisation of the scaling estimate, not a physical constant.
+NOISE_NORMALISATION_MPC3 = 1e3
+
+
+def system_temperature(
+    z_obs: float,
+    f_21_hz: float = 1420.405e6,
+) -> Tuple[float, float]:
+    """
+    HERA system temperature and observed frequency at a reference redshift.
+
+    ``T_sys = T_rcvr + T_sky(300 MHz / ν)^2.55``, with the constants from
+    :data:`T_RECEIVER_K`, :data:`T_SKY_300MHZ_K` and
+    :data:`SKY_SPECTRAL_INDEX`.
+
+    Parameters
+    ----------
+    z_obs : float
+        Reference redshift.
+    f_21_hz : float, optional
+        21 cm rest frequency [Hz].
+
+    Returns
+    -------
+    t_sys_mK : float
+        System temperature [mK].
+    observed_frequency : float
+        Redshifted 21 cm frequency [Hz].
+    """
+    observed_frequency = f_21_hz / (1.0 + z_obs)
+    t_sys_kelvin = T_RECEIVER_K + T_SKY_300MHZ_K * (
+        300e6 / observed_frequency
+    ) ** SKY_SPECTRAL_INDEX
+    return float(t_sys_kelvin * 1e3), float(observed_frequency)
 
 
 def hera_thermal_noise_power(
@@ -602,7 +671,7 @@ def hera_thermal_noise_power(
 
     Uses the standard sky+receiver model
     ``T_sys = 100 K + 60 K (300 MHz / ν)^2.55`` and
-    ``P_N ∝ T_sys² / (t_int Δν)``.
+    ``P_N = T_sys² × 10³ / (t_int Δν)``.
 
     Parameters
     ----------
@@ -613,26 +682,28 @@ def hera_thermal_noise_power(
     bandwidth : float
         Per-band bandwidth [Hz].
     f_21_hz : float, optional
-        21 cm rest frequency [Hz].
+        21 cm rest frequency [Hz].  Note that the source notebook hardcodes
+        ``1.42e9`` in its noise cell while using ``1420.405e6`` everywhere
+        else; the pipeline uses the precise value throughout, which shifts
+        ``P_N`` by 0.1 %.
 
     Returns
     -------
     float
         Thermal noise power in the same units as the 21 cm auto-spectrum
-        [mK^2 Mpc^3].
+        [mK^2 Mpc^3].  Independent of ``k`` — the estimate carries no
+        baseline-density or beam information.
 
     Notes
     -----
     This is a scaling estimate, not a full instrument model.  For publication
     forecasts replace it with `21cmSense
-    <https://github.com/rasg-affiliates/21cmSense>`_.
+    <https://github.com/rasg-affiliates/21cmSense>`_, or with La Plante et al.
+    (2023) Eq. 11, which resolves ``P_N(k_perp)`` through the baseline density.
     """
-    observed_frequency = f_21_hz / (1.0 + z_obs)                    # [Hz]
-    system_temperature = (
-        100.0 + 60.0 * (300e6 / observed_frequency) ** 2.55
-    ) * 1e3                                                          # [mK]
+    t_sys_mK, _ = system_temperature(z_obs, f_21_hz)
     return float(
-        system_temperature ** 2 * 1e3 / (integration_time * bandwidth)
+        t_sys_mK ** 2 * NOISE_NORMALISATION_MPC3 / (integration_time * bandwidth)
     )
 
 
@@ -668,13 +739,22 @@ def cross_power_snr(
     Returns
     -------
     SNRResult
-        Per-mode maps and the total significance.
+        Per-mode maps, the two variance terms, and the total significance.
+
+    Notes
+    -----
+    La Plante's Eqs. 15–17 carry factors of the brightness-temperature
+    normalisation ``T_0(z)``: ``σ_21 = (P_21 + P_N,21)/T_0²`` and the SNR is
+    ``|P_× / T_0| / σ_×``.  Those factors **cancel exactly** in the ratio, so
+    the form used here — which omits ``T_0`` throughout, as the source
+    notebook does — gives an identical SNR.
     """
     sigma_21cm = np.abs(P_21cm_auto) + P_noise_21cm
     sigma_galaxy = np.abs(P_galaxy_observed) + P_noise_galaxy
-    sigma_cross = np.sqrt(
-        0.5 * (P_cross_observed ** 2 + sigma_21cm * sigma_galaxy)
-    )
+
+    cosmic_variance_term = 0.5 * P_cross_observed ** 2
+    noise_coupling_term = 0.5 * sigma_21cm * sigma_galaxy
+    sigma_cross = np.sqrt(cosmic_variance_term + noise_coupling_term)
 
     snr_per_mode = np.abs(P_cross_observed) / sigma_cross
 
@@ -690,6 +770,10 @@ def cross_power_snr(
         sigma_cross=sigma_cross,
         P_noise_21cm=float(P_noise_21cm),
         P_noise_galaxy=float(P_noise_galaxy),
+        sigma_21cm=sigma_21cm,
+        sigma_galaxy=sigma_galaxy,
+        cosmic_variance_term=cosmic_variance_term,
+        noise_coupling_term=noise_coupling_term,
     )
 
 
@@ -711,6 +795,284 @@ def total_snr(snr_per_mode: np.ndarray, mask: Optional[np.ndarray] = None) -> fl
     """
     values = snr_per_mode if mask is None else snr_per_mode[mask]
     return float(np.sqrt(np.nansum(np.asarray(values) ** 2)))
+
+
+# ===========================================================================
+# 5b  The complete uncertainty budget
+# ===========================================================================
+
+@dataclass
+class UncertaintyBudget:
+    """
+    Every term of the 21 cm × galaxy cross-power uncertainty budget.
+
+    This is the pipeline's transcription of the photo-z / wedge / noise / SNR
+    chain in ``21cmfast_HERAxEuclid_lightcone.ipynb`` (its "Photo-z Radial
+    Smearing & Foreground Wedge Mask" and "Cross-correlation SNR map"
+    sections), computed by :func:`compute_uncertainty_budget`.
+
+    Attributes
+    ----------
+    k_perp, k_parallel : ndarray
+        Bin centres the budget was evaluated on [Mpc^-1].
+    z_obs : float
+        Reference redshift.
+    photoz_uncertainty : float
+        Absolute σ_z used (**not** σ_z/(1+z)).
+    radial_smearing : float
+        σ_r = c σ_z / H(z_obs) [Mpc].
+    photoz_kernel : ndarray
+        W(k_par), shape ``(1, n_par)``.
+    P_cross_observed : ndarray
+        ``P_cross × W`` — one factor, only the galaxy side is smeared.
+    P_galaxy_observed : ndarray
+        ``P_gal × W²`` — both fields in the pair are smeared.
+    horizon_slope, fov_slope : float
+        Wedge slopes; the **horizon** slope defines the mask, the FoV slope is
+        drawn on figures only.
+    wedge_buffer : float
+        Margin added above the wedge line [Mpc^-1].
+    outside_wedge : ndarray of bool
+        True where a bin survives wedge excision.
+    observed_frequency_hz : float
+        Redshifted 21 cm frequency [Hz].
+    system_temperature_mK : float
+        T_sys at that frequency [mK].
+    integration_time, bandwidth : float
+        Instrument configuration [s], [Hz].
+    mean_galaxy_density : float
+        n̄ used for the shot noise.
+    snr : SNRResult
+        Per-mode maps, variance terms, and the total significance.
+
+    Notes
+    -----
+    The per-bin ``mode_counts`` are **not** divided into the variance: the
+    quoted SNR is a per-bin quantity summed in quadrature, exactly as the
+    notebook computes it.  A mode-weighted total would be larger.
+    """
+
+    k_perp: np.ndarray
+    k_parallel: np.ndarray
+    z_obs: float
+
+    photoz_uncertainty: float
+    radial_smearing: float
+    photoz_kernel: np.ndarray
+    P_cross_observed: np.ndarray
+    P_galaxy_observed: np.ndarray
+
+    horizon_slope: float
+    fov_slope: float
+    wedge_buffer: float
+    outside_wedge: np.ndarray
+
+    observed_frequency_hz: float
+    system_temperature_mK: float
+    integration_time: float
+    bandwidth: float
+    mean_galaxy_density: float
+
+    snr: SNRResult
+
+    # ── Derived summaries ─────────────────────────────────────────────────
+    @property
+    def total_snr(self) -> float:
+        """Total detection significance outside the wedge [σ]."""
+        return self.snr.total_snr
+
+    @property
+    def fraction_outside_wedge(self) -> float:
+        """Fraction of ``(k_perp, k_parallel)`` bins surviving the wedge."""
+        return float(self.outside_wedge.mean())
+
+    @property
+    def detected(self) -> bool:
+        """True when the total significance exceeds the 5σ convention."""
+        return bool(self.snr.total_snr > 5.0)
+
+    @property
+    def cosmic_variance_fraction(self) -> float:
+        """
+        Share of ``σ_cross²`` carried by sample variance, outside the wedge.
+
+        Near 1 the budget is cosmic-variance limited (more integration time
+        will not help); near 0 it is noise limited.  ``NaN`` when no usable
+        bin has a finite variance.
+        """
+        usable = self.outside_wedge & np.isfinite(self.snr.sigma_cross)
+        if not usable.any():
+            return float("nan")
+        cosmic = float(np.nansum(self.snr.cosmic_variance_term[usable]))
+        noise = float(np.nansum(self.snr.noise_coupling_term[usable]))
+        if cosmic + noise <= 0:
+            return float("nan")
+        return cosmic / (cosmic + noise)
+
+    def as_dict(self) -> dict:
+        """
+        Scalar summary of the budget, ready for the pipeline summary JSON.
+
+        Returns
+        -------
+        dict
+            Every scalar term, JSON-serialisable.
+        """
+        return {
+            "z_obs": float(self.z_obs),
+            "photoz_uncertainty_sigma_z": float(self.photoz_uncertainty),
+            "radial_smearing_Mpc": float(self.radial_smearing),
+            "photoz_kernel_first_bin": float(self.photoz_kernel.ravel()[0]),
+            "photoz_kernel_max": float(self.photoz_kernel.max()),
+            "horizon_wedge_slope": float(self.horizon_slope),
+            "fov_wedge_slope": float(self.fov_slope),
+            "wedge_buffer_Mpc-1": float(self.wedge_buffer),
+            "modes_outside_wedge": int(self.outside_wedge.sum()),
+            "modes_total": int(self.outside_wedge.size),
+            "modes_outside_wedge_fraction": self.fraction_outside_wedge,
+            "observed_frequency_MHz": self.observed_frequency_hz / 1e6,
+            "system_temperature_K": self.system_temperature_mK / 1e3,
+            "integration_time_s": float(self.integration_time),
+            "bandwidth_Hz": float(self.bandwidth),
+            "mean_galaxy_density": float(self.mean_galaxy_density),
+            "P_noise_21cm": self.snr.P_noise_21cm,
+            "P_noise_galaxy": self.snr.P_noise_galaxy,
+            "cosmic_variance_fraction": self.cosmic_variance_fraction,
+            "total_snr_sigma": self.snr.total_snr,
+            "detection_above_5sigma": self.detected,
+        }
+
+
+def compute_uncertainty_budget(
+    spectra: PowerSpectra,
+    z_obs: float,
+    photoz_uncertainty: float = 0.45,
+    wedge_buffer: float = 0.0677,
+    integration_time: float = 1000 * 3600,
+    bandwidth: float = 8e6,
+    mean_galaxy_density: float = 3e-3,
+    dish_diameter: float = 14.0,
+    f_21_hz: float = 1420.405e6,
+    speed_of_light_mps: float = 3e8,
+    hubble_constant: float = 67.36,
+    omega_m: float = 0.315,
+    speed_of_light_kms: float = 3e5,
+) -> UncertaintyBudget:
+    """
+    Run the full uncertainty-budget chain on a set of power spectra.
+
+    Applies, in order: photo-z damping of the galaxy and cross spectra,
+    foreground-wedge excision, the HERA thermal-noise and galaxy shot-noise
+    estimates, and the La Plante et al. (2023) per-mode variance and SNR.
+
+    This is the single entry point for the budget — ``run_pipeline.py`` calls
+    nothing else, so the notebook and the HPC run cannot drift apart.
+
+    Parameters
+    ----------
+    spectra : PowerSpectra
+        Undamped spectra from :func:`compute_all_power_spectra`.
+    z_obs : float
+        Reference redshift for the wedge, smearing, and noise.
+    photoz_uncertainty : float, optional
+        Absolute σ_z (**not** σ_z/(1+z)).  Default 0.45, the Euclid
+        requirement σ_z/(1+z) < 0.05 evaluated at z = 7.
+    wedge_buffer : float, optional
+        Margin above the wedge line [Mpc^-1].  Default 0.0677 = 0.1 h Mpc^-1
+        (Pober et al. 2014 "moderate"; the 21cmSense default).
+    integration_time : float, optional
+        Total integration [s].  Default 1000 h.
+    bandwidth : float, optional
+        Per-band bandwidth [Hz].
+    mean_galaxy_density : float, optional
+        n̄ for the shot noise ``P_N,gal = 1/n̄``.
+    dish_diameter : float, optional
+        Dish diameter [m], for the FoV wedge line.
+    f_21_hz : float, optional
+        21 cm rest frequency [Hz].
+    speed_of_light_mps : float, optional
+        Speed of light [m s^-1], for the observed wavelength.
+    hubble_constant, omega_m, speed_of_light_kms : float, optional
+        Background cosmology.
+
+    Returns
+    -------
+    UncertaintyBudget
+        Every term of the budget, plus the SNR maps.
+
+    References
+    ----------
+    La Plante et al. (2023), arXiv:2205.09770 — Eqs. 15–17.
+    Pober et al. (2014), ApJ 782, 66 — the wedge buffer.
+    """
+    cosmology = dict(
+        hubble_constant=hubble_constant,
+        omega_m=omega_m,
+        speed_of_light_kms=speed_of_light_kms,
+    )
+
+    # ── Photo-z damping: one factor of W on the cross, two on the auto ────
+    radial_smearing = radial_smearing_length(
+        photoz_uncertainty=photoz_uncertainty, z_obs=z_obs, **cosmology
+    )
+    kernel = photoz_damping_kernel(spectra.k_parallel, radial_smearing)
+    p_cross_observed = spectra.P_cross * kernel
+    p_galaxy_observed = spectra.P_galaxy_auto * kernel ** 2
+
+    # ── Foreground wedge: horizon slope masks, FoV slope is for figures ───
+    horizon_slope = horizon_wedge_slope(z_obs, **cosmology)
+    fov_slope = fov_wedge_slope(
+        z_obs,
+        dish_diameter=dish_diameter,
+        f_21_hz=f_21_hz,
+        speed_of_light_mps=speed_of_light_mps,
+        **cosmology,
+    )
+    outside_wedge = foreground_wedge_mask(
+        spectra.k_perp, spectra.k_parallel,
+        slope=horizon_slope, buffer=wedge_buffer,
+    )
+
+    # ── Noise ─────────────────────────────────────────────────────────────
+    t_sys_mK, observed_frequency = system_temperature(z_obs, f_21_hz)
+    p_noise_21cm = hera_thermal_noise_power(
+        z_obs=z_obs,
+        integration_time=integration_time,
+        bandwidth=bandwidth,
+        f_21_hz=f_21_hz,
+    )
+    p_noise_galaxy = 1.0 / mean_galaxy_density
+
+    # ── Variance and SNR ──────────────────────────────────────────────────
+    snr = cross_power_snr(
+        P_cross_observed=p_cross_observed,
+        P_21cm_auto=spectra.P_21cm_auto,
+        P_galaxy_observed=p_galaxy_observed,
+        P_noise_21cm=p_noise_21cm,
+        P_noise_galaxy=p_noise_galaxy,
+        outside_wedge=outside_wedge,
+    )
+
+    return UncertaintyBudget(
+        k_perp=spectra.k_perp,
+        k_parallel=spectra.k_parallel,
+        z_obs=float(z_obs),
+        photoz_uncertainty=float(photoz_uncertainty),
+        radial_smearing=radial_smearing,
+        photoz_kernel=kernel,
+        P_cross_observed=p_cross_observed,
+        P_galaxy_observed=p_galaxy_observed,
+        horizon_slope=horizon_slope,
+        fov_slope=fov_slope,
+        wedge_buffer=float(wedge_buffer),
+        outside_wedge=outside_wedge,
+        observed_frequency_hz=observed_frequency,
+        system_temperature_mK=t_sys_mK,
+        integration_time=float(integration_time),
+        bandwidth=float(bandwidth),
+        mean_galaxy_density=float(mean_galaxy_density),
+        snr=snr,
+    )
 
 
 # ===========================================================================

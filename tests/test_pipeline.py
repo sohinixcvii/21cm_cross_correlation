@@ -211,6 +211,96 @@ def test_max_halos_is_recorded_in_summary(workspace) -> None:
     assert summary["simulation"]["n_halos_total"] == 4_000
 
 
+def test_budget_overrides_default_to_the_stored_attributes(workspace) -> None:
+    """With no flags, the budget uses the HDF5 attributes verbatim."""
+    assert run_pipeline.main(
+        base_args(workspace, "--analysis", "force", "--plots", "none")
+    ) == 0
+
+    with open(workspace["summary"]) as f:
+        budget = json.load(f)["uncertainty_budget"]
+
+    # Fixture attributes: sigma_z = 0.059, wedge_buffer = 0.0677.
+    assert budget["photoz_uncertainty_sigma_z"] == pytest.approx(0.059)
+    assert budget["wedge_buffer_Mpc-1"] == pytest.approx(0.0677)
+
+
+def test_sigma_z_override_changes_the_budget(workspace) -> None:
+    """``--sigma-z`` overrides the stored attribute and damps harder."""
+    assert run_pipeline.main(
+        base_args(workspace, "--analysis", "force", "--plots", "none",
+                  "--sigma-z", "0.45")
+    ) == 0
+
+    with open(workspace["summary"]) as f:
+        budget = json.load(f)["uncertainty_budget"]
+
+    assert budget["photoz_uncertainty_sigma_z"] == pytest.approx(0.45)
+    # sigma_r = c sigma_z / H(z) grows in proportion to sigma_z.
+    assert budget["radial_smearing_Mpc"] == pytest.approx(157.5, rel=1e-2)
+
+
+def test_wedge_buffer_override_shrinks_the_usable_region(workspace) -> None:
+    """A larger ``--wedge-buffer`` leaves strictly fewer usable modes."""
+    assert run_pipeline.main(
+        base_args(workspace, "--analysis", "force", "--plots", "none",
+                  "--wedge-buffer", "0.0")
+    ) == 0
+    with open(workspace["summary"]) as f:
+        loose = json.load(f)["uncertainty_budget"]
+
+    assert run_pipeline.main(
+        base_args(workspace, "--plots", "none", "--wedge-buffer", "0.5")
+    ) == 0
+    with open(workspace["summary"]) as f:
+        strict = json.load(f)["uncertainty_budget"]
+
+    assert strict["modes_outside_wedge"] < loose["modes_outside_wedge"]
+    assert strict["wedge_buffer_Mpc-1"] == pytest.approx(0.5)
+
+
+def test_instrument_overrides_change_the_thermal_noise(workspace) -> None:
+    """``--integration-time`` feeds through to P_N,21 as 1/t."""
+    assert run_pipeline.main(
+        base_args(workspace, "--analysis", "force", "--plots", "none",
+                  "--integration-time", "3.6e6")
+    ) == 0
+    with open(workspace["summary"]) as f:
+        short = json.load(f)["uncertainty_budget"]
+
+    assert run_pipeline.main(
+        base_args(workspace, "--plots", "none", "--integration-time", "7.2e6")
+    ) == 0
+    with open(workspace["summary"]) as f:
+        long = json.load(f)["uncertainty_budget"]
+
+    assert long["P_noise_21cm"] == pytest.approx(short["P_noise_21cm"] / 2)
+
+
+def test_budget_is_cached_alongside_the_spectra(workspace) -> None:
+    """The products file carries the budget group after a run."""
+    from src.dataio import load_uncertainty_budget
+
+    assert run_pipeline.main(
+        base_args(workspace, "--analysis", "force", "--plots", "none")
+    ) == 0
+
+    maps, attrs = load_uncertainty_budget(workspace["products"])
+
+    assert maps["outside_wedge"].dtype == bool
+    assert "sigma_cross" in maps and "cosmic_variance_term" in maps
+    assert attrs["total_snr_sigma"] >= 0.0
+
+
+def test_budget_figure_is_written(workspace) -> None:
+    """``--plots budget`` renders only the uncertainty-budget figure."""
+    assert run_pipeline.main(
+        base_args(workspace, "--analysis", "force", "--plots", "budget")
+    ) == 0
+
+    assert sorted(os.listdir(workspace["figdir"])) == ["uncertainty_budget.png"]
+
+
 def test_missing_data_file_returns_error_code(tmp_path) -> None:
     """A missing simulation file exits non-zero rather than raising."""
     exit_code = run_pipeline.main([

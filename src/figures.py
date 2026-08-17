@@ -38,11 +38,11 @@ from matplotlib.figure import Figure
 from scipy.ndimage import generic_filter
 
 try:  # local package import (repo root on sys.path)
-    from src.analysis import BiasEstimate, SNRResult
+    from src.analysis import BiasEstimate, SNRResult, UncertaintyBudget
     from src.conversions import sfr_to_Muv
     from src.dataio import PowerSpectra, SimulationData
 except ImportError:  # direct import of the module (src/ on sys.path)
-    from analysis import BiasEstimate, SNRResult
+    from analysis import BiasEstimate, SNRResult, UncertaintyBudget
     from conversions import sfr_to_Muv
     from dataio import PowerSpectra, SimulationData
 
@@ -60,6 +60,7 @@ __all__ = [
     "plot_main_sequence",
     "plot_power_spectra",
     "plot_snr",
+    "plot_uncertainty_budget",
     "plot_bias_diagnostic",
 ]
 
@@ -906,6 +907,32 @@ def _signed_log(power: np.ndarray) -> Tuple[np.ndarray, float]:
     return filled, clim
 
 
+def _mathtext_float(value: float, significant: int = 3) -> str:
+    """
+    Render a float as mathtext, using ``a × 10^b`` for extreme exponents.
+
+    Python's ``%g`` produces ``1.06e-111``, which mathtext typesets with a
+    stray gap around the minus sign.  Splitting the exponent out avoids it.
+
+    Parameters
+    ----------
+    value : float
+        Number to render.
+    significant : int, optional
+        Significant figures in the mantissa.
+
+    Returns
+    -------
+    str
+        A mathtext fragment, already wrapped in ``$…$`` where needed.
+    """
+    formatted = f"{value:.{significant}g}"
+    if "e" not in formatted:
+        return formatted
+    mantissa, exponent = formatted.split("e")
+    return rf"${mantissa} \times 10^{{{int(exponent)}}}$"
+
+
 def plot_power_spectra(
     spectra: PowerSpectra,
     data: SimulationData,
@@ -1030,6 +1057,93 @@ def plot_snr(
     fig.suptitle(
         rf"HERA $\times$ Euclid — lightcone $z = {data.z_min}$–${data.z_max}$   "
         rf"($\sigma_z = {data.get('photoz_uncertainty', 0.45)}$)",
+        fontsize=13,
+    )
+    return fig
+
+
+def plot_uncertainty_budget(
+    budget: UncertaintyBudget,
+    data: SimulationData,
+) -> Figure:
+    """
+    Where the cross-power uncertainty comes from, in three panels.
+
+    Panel 1 — the photo-z damping kernel ``W(k_par)`` against the smallest
+    ``k_par`` the wedge admits, which is what makes the two cuts conflict.
+    Panel 2 — ``σ_cross`` over the ``(k_perp, k_parallel)`` plane, with the
+    wedge boundary overlaid.
+    Panel 3 — the share of ``σ_cross²`` carried by sample variance rather than
+    noise coupling, i.e. which term limits each mode.
+
+    Parameters
+    ----------
+    budget : UncertaintyBudget
+        Output of ``src.analysis.compute_uncertainty_budget``.
+    data : SimulationData
+        Loaded simulation, for the title metadata.
+
+    Returns
+    -------
+    Figure
+        The assembled 1 × 3 figure.
+    """
+    k_perp = budget.k_perp
+    k_parallel = budget.k_parallel
+
+    fig, axes = plt.subplots(1, 3, figsize=(19, 5.5))
+
+    # ── Panel 1: damping kernel vs the wedge's lowest admitted k_par ──────
+    kernel = budget.photoz_kernel.ravel()
+    axes[0].loglog(k_parallel, np.clip(kernel, 1e-300, None), "o-", lw=2,
+                   color="C0", label=rf"$W$, $\sigma_z={budget.photoz_uncertainty:g}$")
+    # Smallest k_par the wedge lets through, at the smallest k_perp.
+    k_par_wedge_min = k_perp.min() * budget.horizon_slope + budget.wedge_buffer
+    axes[0].axvline(k_par_wedge_min, color="crimson", ls="--", lw=1.5,
+                    label=r"wedge floor at $k_\perp^{\rm min}$")
+    axes[0].axhline(0.5, color="grey", ls=":", lw=1.2, label="$W = 0.5$")
+    axes[0].set_xlabel(r"$k_\parallel$  [Mpc$^{-1}$]")
+    axes[0].set_ylabel(r"$W(k_\parallel)$")
+    axes[0].set_ylim(max(np.min(kernel[kernel > 0], initial=1e-12) * 0.1, 1e-30), 2.0)
+    axes[0].legend(fontsize=8, loc="lower left")
+    axes[0].set_title(rf"Photo-$z$ damping ($\sigma_r = {budget.radial_smearing:.1f}$ Mpc)")
+
+    # ── Panel 2: sigma_cross across the plane ─────────────────────────────
+    with np.errstate(divide="ignore", invalid="ignore"):
+        sigma_display = fill_nan_nearest(np.log10(budget.snr.sigma_cross.T))
+    im_sigma = axes[1].pcolormesh(k_perp, k_parallel, sigma_display,
+                                  cmap="viridis", shading="auto")
+    fig.colorbar(im_sigma, ax=axes[1], label=r"$\log_{10}\sigma_\times$")
+    _add_wedge_lines(axes[1], k_perp, budget.horizon_slope, budget.fov_slope,
+                     "w", label=True)
+    axes[1].legend(loc="upper left", fontsize=8)
+    axes[1].set_title(r"Cross-power uncertainty $\sigma_\times$")
+    _style_k_axes(axes[1], k_perp, k_parallel)
+
+    # ── Panel 3: which term dominates the variance ────────────────────────
+    with np.errstate(divide="ignore", invalid="ignore"):
+        denominator = (
+            budget.snr.cosmic_variance_term + budget.snr.noise_coupling_term
+        )
+        fraction = np.where(
+            denominator > 0,
+            budget.snr.cosmic_variance_term / denominator,
+            np.nan,
+        )
+    im_frac = axes[2].pcolormesh(k_perp, k_parallel, fill_nan_nearest(fraction.T),
+                                 cmap="coolwarm", shading="auto", vmin=0, vmax=1)
+    fig.colorbar(im_frac, ax=axes[2],
+                 label=r"cosmic-variance share of $\sigma_\times^2$")
+    _add_wedge_lines(axes[2], k_perp, budget.horizon_slope, budget.fov_slope, "k")
+    axes[2].set_title("Sample variance (1) vs noise (0)")
+    _style_k_axes(axes[2], k_perp, k_parallel)
+
+    fig.suptitle(
+        rf"Uncertainty budget — $z_{{\rm obs}} = {budget.z_obs}$, "
+        rf"$\sigma_z = {budget.photoz_uncertainty:g}$, "
+        rf"buffer $= {budget.wedge_buffer:g}$ Mpc$^{{-1}}$   "
+        rf"({budget.fraction_outside_wedge:.1%} of modes usable, "
+        rf"total SNR = {_mathtext_float(budget.total_snr)} $\sigma$)",
         fontsize=13,
     )
     return fig

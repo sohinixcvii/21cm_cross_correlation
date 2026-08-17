@@ -220,6 +220,22 @@ def test_plot_snr(tiny_sim: SimulationData, spectra, wedge_slopes, tmp_path) -> 
     assert_saves(fig, tmp_path, "snr")
 
 
+def test_plot_uncertainty_budget(
+    tiny_sim: SimulationData, spectra, tmp_path
+) -> None:
+    """The uncertainty-budget figure renders and saves."""
+    budget = analysis.compute_uncertainty_budget(
+        spectra=spectra,
+        z_obs=tiny_sim.z_obs,
+        photoz_uncertainty=tiny_sim.get("photoz_uncertainty"),
+        wedge_buffer=tiny_sim.get("wedge_buffer"),
+        mean_galaxy_density=tiny_sim.get("mean_galaxy_density"),
+    )
+
+    fig = figures.plot_uncertainty_budget(budget, tiny_sim)
+    assert_saves(fig, tmp_path, "uncertainty_budget")
+
+
 def test_plot_bias_diagnostic(tiny_sim: SimulationData, tmp_path) -> None:
     """The bias diagnostic renders and saves."""
     pytest.importorskip("hmf")

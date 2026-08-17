@@ -75,6 +75,7 @@ from src.dataio import (                                # noqa: E402
     load_simulation,
     products_are_stale,
     save_power_spectra,
+    save_uncertainty_budget,
 )
 
 warnings.filterwarnings("ignore")
@@ -85,8 +86,9 @@ warnings.filterwarnings("ignore")
 #   scaling  UVLF, M_star–M_UV, star-forming main sequence (Part 2)
 #   power    2D cylindrical power spectra (Part 3)
 #   snr      per-mode SNR and photo-z damped cross-power (Part 3)
+#   budget   uncertainty-budget breakdown: damping, sigma terms, wedge (Part 3)
 #   bias     Euclid-selected halo masses and b_h(M, z) (Part 3)
-PLOT_GROUPS = ("fields", "halos", "scaling", "power", "snr", "bias")
+PLOT_GROUPS = ("fields", "halos", "scaling", "power", "snr", "budget", "bias")
 
 DEFAULT_DATA = os.path.join("outputs", "lightcone_data.h5")
 DEFAULT_PRODUCTS = os.path.join("outputs", "analysis_products.h5")
@@ -273,97 +275,90 @@ def power_spectra_stage(
 def observational_stage(
     data: SimulationData,
     spectra,
+    photoz_uncertainty: Optional[float] = None,
+    wedge_buffer: Optional[float] = None,
+    integration_time: Optional[float] = None,
+    bandwidth: Optional[float] = None,
     quiet: bool = False,
-) -> Dict[str, Any]:
+) -> analysis.UncertaintyBudget:
     """
-    Apply photo-z damping, wedge excision, and the noise/SNR calculation.
+    Compute the uncertainty budget: photo-z damping, wedge, noise, and SNR.
+
+    Every value defaults to the corresponding root attribute of the stored
+    simulation; the four overrides let a survey or instrument parameter be
+    swept from the command line without re-running 21cmFAST, since none of
+    them affects the simulated fields.
 
     Parameters
     ----------
     data : SimulationData
-        Loaded simulation (supplies survey and instrument metadata).
+        Loaded simulation (supplies survey, instrument, and cosmology
+        metadata).
     spectra : PowerSpectra
         Computed power spectra.
+    photoz_uncertainty : float, optional
+        Absolute σ_z override.  Defaults to the ``photoz_uncertainty``
+        attribute, or 0.45 — the Euclid requirement σ_z/(1+z) < 0.05 at
+        z = 7.  This is **not** the fractional value; see
+        :func:`src.analysis.radial_smearing_length`.
+    wedge_buffer : float, optional
+        Wedge margin override [Mpc^-1].  Defaults to the ``wedge_buffer``
+        attribute, or 0.0677 = 0.1 h Mpc^-1 (Pober et al. 2014 "moderate").
+    integration_time : float, optional
+        Integration-time override [s].  Defaults to the attribute, or 1000 h.
+    bandwidth : float, optional
+        Bandwidth override [Hz].  Defaults to the attribute, or 8 MHz.
     quiet : bool, optional
         Suppress progress output.
 
     Returns
     -------
-    dict
-        Keys: ``P_cross_observed``, ``P_galaxy_observed``, ``outside_wedge``,
-        ``snr`` (:class:`src.analysis.SNRResult`), ``horizon_slope``,
-        ``fov_slope``, ``radial_smearing``.
+    UncertaintyBudget
+        Every term of the budget, from :func:`src.analysis.compute_uncertainty_budget`.
     """
-    z_obs = data.z_obs
-    h0 = data.get("HUBBLE_CONSTANT", 67.36)
-    omega_m = data.get("OMEGA_M_0", 0.315)
-    c_kms = data.get("SPEED_OF_LIGHT_KMS", 3e5)
+    def resolve(override: Optional[float], name: str, fallback: float) -> float:
+        """Command-line override, else the stored attribute, else the default."""
+        return float(override) if override is not None else data.get(name, fallback)
 
-    cosmology = dict(hubble_constant=h0, omega_m=omega_m, speed_of_light_kms=c_kms)
-
-    # ── Photo-z damping ───────────────────────────────────────────────────
-    radial_smearing = analysis.radial_smearing_length(
-        # Absolute sigma_z (not sigma_z/(1+z)); 0.45 at z = 7 matches the
-        # Euclid requirement sigma_z/(1+z) < 0.05.
-        photoz_uncertainty=data.get("photoz_uncertainty", 0.45),
-        z_obs=z_obs, **cosmology,
-    )
-    kernel = analysis.photoz_damping_kernel(spectra.k_parallel, radial_smearing)
-
-    p_cross_observed = spectra.P_cross * kernel
-    p_galaxy_observed = spectra.P_galaxy_auto * kernel ** 2
-
-    # ── Foreground wedge ──────────────────────────────────────────────────
-    horizon_slope = analysis.horizon_wedge_slope(z_obs, **cosmology)
-    fov_slope = analysis.fov_wedge_slope(
-        z_obs,
+    budget = analysis.compute_uncertainty_budget(
+        spectra=spectra,
+        z_obs=data.z_obs,
+        photoz_uncertainty=resolve(
+            photoz_uncertainty, "photoz_uncertainty", 0.45
+        ),
+        wedge_buffer=resolve(wedge_buffer, "wedge_buffer", 0.0677),
+        integration_time=resolve(
+            integration_time, "integration_time", 1000 * 3600
+        ),
+        bandwidth=resolve(bandwidth, "bandwidth", 8e6),
+        mean_galaxy_density=data.get("mean_galaxy_density", 3e-3),
         dish_diameter=data.get("HERA_DISH_DIAMETER", 14.0),
         f_21_hz=data.get("F_21_HZ", 1420.405e6),
         speed_of_light_mps=data.get("SPEED_OF_LIGHT_MPS", 3e8),
-        **cosmology,
-    )
-    outside_wedge = analysis.foreground_wedge_mask(
-        spectra.k_perp, spectra.k_parallel,
-        slope=horizon_slope,
-        # 0.1 h Mpc^-1 (Pober et al. 2014 "moderate"; 21cmSense default)
-        buffer=data.get("wedge_buffer", 0.0677),
+        hubble_constant=data.get("HUBBLE_CONSTANT", 67.36),
+        omega_m=data.get("OMEGA_M_0", 0.315),
+        speed_of_light_kms=data.get("SPEED_OF_LIGHT_KMS", 3e5),
     )
 
-    # ── Noise and SNR ─────────────────────────────────────────────────────
-    p_noise_21cm = analysis.hera_thermal_noise_power(
-        z_obs=z_obs,
-        integration_time=data.get("integration_time", 1000 * 3600),
-        bandwidth=data.get("bandwidth", 8e6),
-        f_21_hz=data.get("F_21_HZ", 1420.405e6),
-    )
-    p_noise_galaxy = 1.0 / data.get("mean_galaxy_density", 3e-3)
-
-    snr = analysis.cross_power_snr(
-        P_cross_observed=p_cross_observed,
-        P_21cm_auto=spectra.P_21cm_auto,
-        P_galaxy_observed=p_galaxy_observed,
-        P_noise_21cm=p_noise_21cm,
-        P_noise_galaxy=p_noise_galaxy,
-        outside_wedge=outside_wedge,
-    )
-
-    log(f"  Photo-z smearing    : σ_r = {radial_smearing:.1f} Mpc", quiet)
-    log(f"  Horizon wedge slope : {horizon_slope:.3f}", quiet)
-    log(f"  HERA FoV slope      : {fov_slope:.3f}", quiet)
+    log(f"  T_sys at {budget.observed_frequency_hz / 1e6:.2f} MHz "
+        f": {budget.system_temperature_mK / 1e3:.1f} K", quiet)
+    log(f"  Photo-z smearing    : σ_z = {budget.photoz_uncertainty:g}  →  "
+        f"σ_r = {budget.radial_smearing:.1f} Mpc", quiet)
+    log(f"  Photo-z kernel      : W = {budget.photoz_kernel.ravel()[0]:.3g} "
+        f"at the first k_∥ bin", quiet)
+    log(f"  Horizon wedge slope : {budget.horizon_slope:.3f}  "
+        f"(buffer {budget.wedge_buffer:g} Mpc⁻¹)", quiet)
+    log(f"  HERA FoV slope      : {budget.fov_slope:.3f}", quiet)
     log(f"  Modes outside wedge : "
-        f"{outside_wedge.sum()}/{outside_wedge.size} "
-        f"({outside_wedge.mean():.1%})", quiet)
-    log(f"  Total SNR (outside wedge) : {snr.total_snr:.1f} σ", quiet)
+        f"{budget.outside_wedge.sum()}/{budget.outside_wedge.size} "
+        f"({budget.fraction_outside_wedge:.1%})", quiet)
+    log(f"  P_N,21 / P_N,gal    : {budget.snr.P_noise_21cm:.4g} mK² Mpc³ / "
+        f"{budget.snr.P_noise_galaxy:.4g} Mpc³", quiet)
+    log(f"  σ² from cosmic var. : "
+        f"{budget.cosmic_variance_fraction:.1%}", quiet)
+    log(f"  Total SNR (outside wedge) : {budget.total_snr:.3g} σ", quiet)
 
-    return {
-        "P_cross_observed": p_cross_observed,
-        "P_galaxy_observed": p_galaxy_observed,
-        "outside_wedge": outside_wedge,
-        "snr": snr,
-        "horizon_slope": horizon_slope,
-        "fov_slope": fov_slope,
-        "radial_smearing": radial_smearing,
-    }
+    return budget
 
 
 def bias_stage(
@@ -438,7 +433,7 @@ def figure_stage(
     groups: Sequence[str],
     data: SimulationData,
     spectra,
-    observed: Dict[str, Any],
+    budget: analysis.UncertaintyBudget,
     bias,
     output_dir: str,
     fmt: str = "png",
@@ -455,7 +450,7 @@ def figure_stage(
         Loaded simulation.
     spectra : PowerSpectra
         Computed power spectra.
-    observed : dict
+    budget : UncertaintyBudget
         Output of :func:`observational_stage`.
     bias : BiasEstimate or None
         Output of :func:`bias_stage`.
@@ -502,16 +497,19 @@ def figure_stage(
     if "power" in groups:
         emit("power_spectra_2d", figures.plot_power_spectra(
             spectra, data,
-            horizon_slope=observed["horizon_slope"],
-            fov_slope=observed["fov_slope"],
+            horizon_slope=budget.horizon_slope,
+            fov_slope=budget.fov_slope,
         ))
 
     if "snr" in groups:
         emit("cross_snr", figures.plot_snr(
-            spectra, observed["snr"], observed["P_cross_observed"], data,
-            horizon_slope=observed["horizon_slope"],
-            fov_slope=observed["fov_slope"],
+            spectra, budget.snr, budget.P_cross_observed, data,
+            horizon_slope=budget.horizon_slope,
+            fov_slope=budget.fov_slope,
         ))
+
+    if "budget" in groups:
+        emit("uncertainty_budget", figures.plot_uncertainty_budget(budget, data))
 
     if "bias" in groups:
         if bias is not None:
@@ -529,7 +527,7 @@ def figure_stage(
 def build_summary(
     data: SimulationData,
     spectra,
-    observed: Dict[str, Any],
+    budget: analysis.UncertaintyBudget,
     selection,
     bias,
     figure_paths: Sequence[str],
@@ -545,7 +543,7 @@ def build_summary(
         Loaded simulation.
     spectra : PowerSpectra
         Computed power spectra.
-    observed : dict
+    budget : UncertaintyBudget
         Output of :func:`observational_stage`.
     selection : EuclidSelection or None
         Output of :func:`bias_stage`.
@@ -563,7 +561,6 @@ def build_summary(
     dict
         Summary of the run.
     """
-    snr = observed["snr"]
     large_scale_cross = float(np.nanmean(spectra.P_cross[:5, :5]))
 
     summary: Dict[str, Any] = {
@@ -597,17 +594,23 @@ def build_summary(
             "large_scale_cross_mean": large_scale_cross,
             "large_scale_anticorrelated": bool(large_scale_cross < 0),
         },
-        "observation": {
-            "radial_smearing_Mpc": observed["radial_smearing"],
-            "horizon_wedge_slope": observed["horizon_slope"],
-            "fov_wedge_slope": observed["fov_slope"],
-            "modes_outside_wedge_fraction": float(observed["outside_wedge"].mean()),
-            "P_noise_21cm": snr.P_noise_21cm,
-            "P_noise_galaxy": snr.P_noise_galaxy,
-            "total_snr_sigma": snr.total_snr,
-            "detection_above_5sigma": bool(snr.total_snr > 5.0),
-        },
+        # Every scalar term of the uncertainty budget, in the order the
+        # calculation applies them: damping -> wedge -> noise -> variance.
+        "uncertainty_budget": budget.as_dict(),
         "figures": [os.path.abspath(p) for p in figure_paths],
+    }
+
+    # Backwards-compatible alias: earlier summaries carried these five keys
+    # under "observation", and downstream notes/scripts still read them.
+    summary["observation"] = {
+        "radial_smearing_Mpc": budget.radial_smearing,
+        "horizon_wedge_slope": budget.horizon_slope,
+        "fov_wedge_slope": budget.fov_slope,
+        "modes_outside_wedge_fraction": budget.fraction_outside_wedge,
+        "P_noise_21cm": budget.snr.P_noise_21cm,
+        "P_noise_galaxy": budget.snr.P_noise_galaxy,
+        "total_snr_sigma": budget.total_snr,
+        "detection_above_5sigma": budget.detected,
     }
 
     if selection is not None:
@@ -657,7 +660,7 @@ def print_report(summary: Dict[str, Any]) -> None:
         Output of :func:`build_summary`.
     """
     sim = summary["simulation"]
-    obs = summary["observation"]
+    ub = summary["uncertainty_budget"]
     ps = summary["power_spectra"]
 
     print(f"\n{SEPARATOR}\n  PIPELINE SUMMARY\n{SEPARATOR}")
@@ -669,9 +672,23 @@ def print_report(summary: Dict[str, Any]) -> None:
     print(f"  Cross-spectrum    : large-scale mean = "
           f"{ps['large_scale_cross_mean']:.3e}  "
           f"({'anti-correlated' if ps['large_scale_anticorrelated'] else 'positive'})")
-    print(f"  Modes outside wedge : {obs['modes_outside_wedge_fraction']:.1%}")
-    print(f"  Total SNR         : {obs['total_snr_sigma']:.1f} σ  "
-          f"({'detection' if obs['detection_above_5sigma'] else 'no detection'} at 5σ)")
+
+    print(f"\n  Uncertainty budget")
+    print(f"    Photo-z         : σ_z = {ub['photoz_uncertainty_sigma_z']:g}  →  "
+          f"σ_r = {ub['radial_smearing_Mpc']:.1f} Mpc  "
+          f"(W = {ub['photoz_kernel_first_bin']:.3g} at the first k_∥ bin)")
+    print(f"    Wedge           : slope {ub['horizon_wedge_slope']:.3f}, "
+          f"buffer {ub['wedge_buffer_Mpc-1']:g} Mpc⁻¹  →  "
+          f"{ub['modes_outside_wedge']}/{ub['modes_total']} modes "
+          f"({ub['modes_outside_wedge_fraction']:.1%}) usable")
+    print(f"    Noise           : T_sys = {ub['system_temperature_K']:.1f} K, "
+          f"P_N,21 = {ub['P_noise_21cm']:.4g} mK² Mpc³, "
+          f"P_N,gal = {ub['P_noise_galaxy']:.4g} Mpc³")
+    print(f"    Variance split  : "
+          f"{ub['cosmic_variance_fraction']:.1%} cosmic variance, "
+          f"{1.0 - ub['cosmic_variance_fraction']:.1%} noise coupling")
+    print(f"    Total SNR       : {ub['total_snr_sigma']:.3g} σ  "
+          f"({'detection' if ub['detection_above_5sigma'] else 'no detection'} at 5σ)")
 
     if "effective_galaxy_bias" in summary:
         bias = summary["effective_galaxy_bias"]
@@ -752,6 +769,31 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--m-uv-bright", type=float, default=-22.0,
                         help="bright-end Euclid magnitude cut (default: -22)")
+
+    budget_group = parser.add_argument_group(
+        "uncertainty budget",
+        "Survey and instrument overrides. None of these affects the simulated "
+        "fields, so they can be swept without --sim force. Each defaults to "
+        "the corresponding attribute of the stored HDF5.",
+    )
+    budget_group.add_argument(
+        "--sigma-z", type=float, default=None, metavar="SIGMA_Z",
+        help="absolute photo-z uncertainty sigma_z, NOT sigma_z/(1+z) "
+             "(stored default: 0.45, the Euclid requirement at z = 7)",
+    )
+    budget_group.add_argument(
+        "--wedge-buffer", type=float, default=None, metavar="MPC-1",
+        help="foreground-wedge margin [Mpc^-1] (stored default: 0.0677 "
+             "= 0.1 h/Mpc, Pober et al. 2014 'moderate')",
+    )
+    budget_group.add_argument(
+        "--integration-time", type=float, default=None, metavar="SECONDS",
+        help="HERA integration time [s] (stored default: 3.6e6 = 1000 h)",
+    )
+    budget_group.add_argument(
+        "--bandwidth", type=float, default=None, metavar="HZ",
+        help="per-band bandwidth [Hz] (stored default: 8e6)",
+    )
     parser.add_argument("--quiet", action="store_true",
                         help="suppress progress output")
 
@@ -834,7 +876,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             products_path=args.products,
             quiet=quiet,
         )
-        observed = observational_stage(data, spectra, quiet=quiet)
+        budget = observational_stage(
+            data, spectra,
+            photoz_uncertainty=args.sigma_z,
+            wedge_buffer=args.wedge_buffer,
+            integration_time=args.integration_time,
+            bandwidth=args.bandwidth,
+            quiet=quiet,
+        )
+        save_uncertainty_budget(args.products, budget)
+        log(f"  Uncertainty budget cached → {args.products}", quiet)
 
         selection, bias = (None, None)
         if needs_catalog:
@@ -850,7 +901,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 groups=plot_groups,
                 data=data,
                 spectra=spectra,
-                observed=observed,
+                budget=budget,
                 bias=bias,
                 output_dir=args.figdir,
                 fmt=args.format,
@@ -863,7 +914,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         summary = build_summary(
             data=data,
             spectra=spectra,
-            observed=observed,
+            budget=budget,
             selection=selection,
             bias=bias,
             figure_paths=figure_paths,

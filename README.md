@@ -63,8 +63,8 @@ Run `python run_pipeline.py --help` for the full list.
 | Path | Contents |
 |------|----------|
 | `outputs/lightcone_data.h5` | Simulation fields, halo catalogue, and metadata (Part 1) |
-| `outputs/analysis_products.h5` | Cached $P_{21}$, $P_\mathrm{gal}$, $P_{21\times\mathrm{gal}}$ and the $k$-grid |
-| `outputs/figures/*.png` | 10 figures: `lightcone_fields`, `lightcone_slice`, `halo_catalogue`, `sfr_relations`, `uv_luminosity_function`, `stellar_mass_muv`, `main_sequence`, `power_spectra_2d`, `cross_snr`, `galaxy_bias` |
+| `outputs/analysis_products.h5` | Cached $P_{21}$, $P_\mathrm{gal}$, $P_{21\times\mathrm{gal}}$ and the $k$-grid, plus the `uncertainty_budget` group (damped spectra, wedge mask, $\sigma$ terms, per-mode SNR) |
+| `outputs/figures/*.png` | 11 figures: `lightcone_fields`, `lightcone_slice`, `halo_catalogue`, `sfr_relations`, `uv_luminosity_function`, `stellar_mass_muv`, `main_sequence`, `power_spectra_2d`, `cross_snr`, `uncertainty_budget`, `galaxy_bias` |
 | `outputs/pipeline_summary.json` | Scalar results: $\langle x_\mathrm{HI}\rangle$, wedge slopes, $\sigma_r$, total SNR, $\langle b_g\rangle$, selection counts |
 
 > **Note:** `submit_job.sh` is a plain shell wrapper — it contains no `#SBATCH`
@@ -125,7 +125,8 @@ The HDF5 file `outputs/lightcone_data.h5` stores all simulation fields (compress
 | Document | Contents |
 |----------|----------|
 | [`PIPELINE.md`](PIPELINE.md) | HPC pipeline summary, Mermaid flowchart, stage table, and the `lightcone_data.h5` schema |
-| [`docs/HPC.md`](docs/HPC.md) | **Parameter-level ground truth for the HPC run** — every configuration value, derived quantity, formula with its evaluated number at $z=7$, file written, disk footprint, and known inconsistency |
+| [`docs/HPC.md`](docs/HPC.md) | **Parameter-level ground truth for the HPC run** — every configuration value, derived quantity, formula with its evaluated number at $z=7$, file written, disk footprint, and known inconsistency. **§13 is the user-defined parameter checklist**: what you must set on a new cluster, the file and line where each parameter lives, and which edits need `--sim force` to take effect |
+| [`docs/uncertainty_budget.md`](docs/uncertainty_budget.md) | **The uncertainty budget, end to end** — every formula of the photo-$z$ / wedge / noise / SNR chain with its evaluated number at $z=7$, the term-by-term audit against the source notebook (bit-identical except one rest-frequency discrepancy), the parameters and their CLI overrides, the HDF5 schema, and what the calculation still does not do |
 | [`CHANGELOG.md`](CHANGELOG.md) | Chronological record of all changes, including corrected literature values |
 | [`TODO.md`](TODO.md) | Outstanding work, priority-ordered — **including the lightcone power-spectrum corrections the Δz = 1.0 range now requires** |
 | [`docs/INSTALL_21cmFASTv4.md`](docs/INSTALL_21cmFASTv4.md) | Step-by-step 21cmFAST v4.1.1 install on CSD3/HPC, plus fixes for quota, conda-plugin, and FFTW linking failures |

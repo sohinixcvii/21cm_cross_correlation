@@ -30,8 +30,14 @@ __all__ = [
     "load_simulation",
     "save_power_spectra",
     "load_power_spectra",
+    "save_uncertainty_budget",
+    "load_uncertainty_budget",
     "products_are_stale",
+    "UNCERTAINTY_GROUP",
 ]
+
+# Group inside ``analysis_products.h5`` holding the uncertainty budget.
+UNCERTAINTY_GROUP = "uncertainty_budget"
 
 
 # ===========================================================================
@@ -340,6 +346,92 @@ def load_power_spectra(path: str) -> Tuple[PowerSpectra, Dict[str, Any]]:
         attrs = dict(f.attrs)
 
     return spectra, attrs
+
+
+def save_uncertainty_budget(path: str, budget: Any) -> None:
+    """
+    Append an uncertainty budget to the analysis-products cache.
+
+    Written into the ``uncertainty_budget`` group of the file created by
+    :func:`save_power_spectra`, so one HDF5 holds both the raw spectra and the
+    observational products derived from them.  Any existing group is replaced,
+    which lets the budget be recomputed (e.g. with a different σ_z) without
+    touching the cached spectra.
+
+    Parameters
+    ----------
+    path : str
+        Analysis-products file, e.g. ``outputs/analysis_products.h5``.
+    budget : src.analysis.UncertaintyBudget
+        The budget to store.  Typed loosely to keep ``dataio`` free of an
+        ``analysis`` import (``analysis`` already imports ``dataio``).
+
+    Notes
+    -----
+    Scalars are stored as attributes of the group; the ``(n_perp, n_par)``
+    maps as datasets.  The boolean wedge mask is stored as ``uint8``.
+    """
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+
+    with h5py.File(path, "a") as f:
+        if UNCERTAINTY_GROUP in f:
+            del f[UNCERTAINTY_GROUP]
+        group = f.create_group(UNCERTAINTY_GROUP)
+
+        group.create_dataset("photoz_kernel", data=np.asarray(budget.photoz_kernel))
+        group.create_dataset("P_cross_observed", data=budget.P_cross_observed)
+        group.create_dataset("P_galaxy_observed", data=budget.P_galaxy_observed)
+        group.create_dataset(
+            "outside_wedge", data=budget.outside_wedge.astype(np.uint8)
+        )
+        group.create_dataset("sigma_cross", data=budget.snr.sigma_cross)
+        group.create_dataset("sigma_21cm", data=budget.snr.sigma_21cm)
+        group.create_dataset("sigma_galaxy", data=budget.snr.sigma_galaxy)
+        group.create_dataset(
+            "cosmic_variance_term", data=budget.snr.cosmic_variance_term
+        )
+        group.create_dataset(
+            "noise_coupling_term", data=budget.snr.noise_coupling_term
+        )
+        group.create_dataset("snr_per_mode", data=budget.snr.snr_per_mode)
+
+        for key, value in budget.as_dict().items():
+            group.attrs[key] = value
+
+
+def load_uncertainty_budget(path: str) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
+    """
+    Read a stored uncertainty budget back.
+
+    Parameters
+    ----------
+    path : str
+        Analysis-products file written by :func:`save_uncertainty_budget`.
+
+    Returns
+    -------
+    maps : dict of ndarray
+        The 2D budget maps.  ``outside_wedge`` is restored as ``bool``.
+    attrs : dict
+        The scalar summary, as produced by ``UncertaintyBudget.as_dict()``.
+
+    Raises
+    ------
+    KeyError
+        If the file holds no ``uncertainty_budget`` group.
+    """
+    with h5py.File(path, "r") as f:
+        if UNCERTAINTY_GROUP not in f:
+            raise KeyError(
+                f"no {UNCERTAINTY_GROUP!r} group in {path}; "
+                "run the analysis stage to compute it"
+            )
+        group = f[UNCERTAINTY_GROUP]
+        maps = {name: group[name][:] for name in group.keys()}
+        maps["outside_wedge"] = maps["outside_wedge"].astype(bool)
+        attrs = dict(group.attrs)
+
+    return maps, attrs
 
 
 def products_are_stale(products_path: str, source_path: str) -> bool:

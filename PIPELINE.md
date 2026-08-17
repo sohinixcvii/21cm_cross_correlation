@@ -40,7 +40,7 @@ flowchart TD
     end
 
     subgraph P3["Stage 3 — src/figures.py (Agg, headless)"]
-        P --> R["power_spectra_2d, cross_snr"]
+        P --> R["power_spectra_2d, cross_snr,\nuncertainty_budget"]
         Q --> T["galaxy_bias"]
         L --> U["lightcone_fields, lightcone_slice,\nhalo_catalogue, sfr_relations,\nuv_luminosity_function,\nstellar_mass_muv, main_sequence"]
     end
@@ -71,8 +71,8 @@ flowchart TD
 |---|-------|----------------|-------|--------|
 | 0 | `submit_job.sh` — shell launcher: activates `21cmfast`, times the run, forwards its arguments to `run_pipeline.py`, emails a report via `sendmail` | HPC login/compute node | CLI arguments | `outputs/<job>_<timestamp>.log` |
 | 1 | `run_simulation.py` — 21cmFASTv4 lightcone, halo catalogue, galaxy field, bias estimate, Kaiser RSD. Invoked as a subprocess when `--sim` says so | HPC compute node (headless, `matplotlib.use("Agg")`) | Config block at top of script | `outputs/lightcone_data.h5` |
-| 2 | `src/analysis.py` — cylindrical power spectra, photo-$z$ damping, wedge excision, HERA noise, SNR, Euclid selection, effective bias | Anywhere | `lightcone_data.h5` | `outputs/analysis_products.h5` |
-| 3 | `src/figures.py` — all 10 figures, `Agg` backend | Anywhere | Loaded data + spectra | `outputs/figures/*.png` |
+| 2 | `src/analysis.py` — cylindrical power spectra, then `compute_uncertainty_budget` (photo-$z$ damping, wedge excision, HERA noise, variance, SNR), Euclid selection, effective bias | Anywhere | `lightcone_data.h5` | `outputs/analysis_products.h5` |
+| 3 | `src/figures.py` — all 11 figures, `Agg` backend | Anywhere | Loaded data + spectra | `outputs/figures/*.png` |
 | 4 | `run_pipeline.py` summary | Anywhere | All of the above | `outputs/pipeline_summary.json` + console report |
 | — | `notebooks/plot_fields.ipynb`, `notebooks/analysis.ipynb` | Local machine or interactive HPC Jupyter session | `lightcone_data.h5` | Inline figures (same content, interactive) |
 
@@ -151,13 +151,19 @@ All commands must run inside the `21cmfast` conda environment
 | `k_perp`, `k_parallel` | Log-spaced bin centres [Mpc⁻¹] |
 | `P_21cm_auto`, `P_galaxy_auto`, `P_cross` | 2D cylindrical spectra on that grid |
 | `mode_counts` | Fourier modes averaged per bin |
+| `uncertainty_budget/` | Group: `photoz_kernel`, `P_cross_observed`, `P_galaxy_observed`, `outside_wedge`, `sigma_21cm`, `sigma_galaxy`, `cosmic_variance_term`, `noise_coupling_term`, `sigma_cross`, `snr_per_mode`; its attrs hold the 21 budget scalars |
 | root attrs | `source_path`, `source_mtime` — used to detect a stale cache |
+
+See [`docs/uncertainty_budget.md`](docs/uncertainty_budget.md) for the formulas
+behind the `uncertainty_budget` group and the four CLI flags
+(`--sigma-z`, `--wedge-buffer`, `--integration-time`, `--bandwidth`) that let
+it be recomputed without re-running the simulation.
 
 ### `outputs/figures/` (Stage 3)
 
 `lightcone_fields`, `lightcone_slice`, `halo_catalogue`, `sfr_relations`,
 `uv_luminosity_function`, `stellar_mass_muv`, `main_sequence`,
-`power_spectra_2d`, `cross_snr`, `galaxy_bias`.
+`power_spectra_2d`, `cross_snr`, `uncertainty_budget`, `galaxy_bias`.
 
 ### `outputs/pipeline_summary.json` (Stage 4)
 
