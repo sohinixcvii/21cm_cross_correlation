@@ -40,9 +40,9 @@ flowchart TD
     end
 
     subgraph P3["Stage 3 — src/figures.py (Agg, headless)"]
-        P --> R["power_spectra_2d, cross_snr,\nuncertainty_budget"]
+        P --> R["power_spectra_2d, galaxy_wedge,\nwedge_real_space, cross_snr,\nuncertainty_budget, photoz_suppression"]
         Q --> T["galaxy_bias"]
-        L --> U["lightcone_fields, lightcone_slice,\nhalo_catalogue, sfr_relations,\nuv_luminosity_function,\nstellar_mass_muv, main_sequence"]
+        L --> U["lightcone_fields, lightcone_slice,\nhalo_catalogue, sfr_relations,\nuv_luminosity_function,\nstellar_mass_muv, main_sequence,\nuv_selection_maps"]
     end
 
     R --> V[("outputs/figures/*.png")]
@@ -72,7 +72,7 @@ flowchart TD
 | 0 | `submit_job.sh` — shell launcher: activates `21cmfast`, times the run, forwards its arguments to `run_pipeline.py`, emails a report via `sendmail` | HPC login/compute node | CLI arguments | `outputs/<job>_<timestamp>.log` |
 | 1 | `run_simulation.py` — 21cmFASTv4 lightcone, halo catalogue, galaxy field, bias estimate, Kaiser RSD. Invoked as a subprocess when `--sim` says so | HPC compute node (headless, `matplotlib.use("Agg")`) | Config block at top of script | `outputs/lightcone_data.h5` |
 | 2 | `src/analysis.py` — cylindrical power spectra, then `compute_uncertainty_budget` (photo-$z$ damping, wedge excision, HERA noise, variance, SNR), Euclid selection, effective bias | Anywhere | `lightcone_data.h5` | `outputs/analysis_products.h5` |
-| 3 | `src/figures.py` — all 11 figures, `Agg` backend | Anywhere | Loaded data + spectra | `outputs/figures/*.png` |
+| 3 | `src/figures.py` — all 15 figures, `Agg` backend | Anywhere | Loaded data + spectra | `outputs/figures/*.png` |
 | 4 | `run_pipeline.py` summary | Anywhere | All of the above | `outputs/pipeline_summary.json` + console report |
 | — | `notebooks/plot_fields.ipynb`, `notebooks/analysis.ipynb` | Local machine or interactive HPC Jupyter session | `lightcone_data.h5` | Inline figures (same content, interactive) |
 
@@ -140,6 +140,7 @@ All commands must run inside the `21cmfast` conda environment
 | Dataset / attrs | Description |
 |---|---|
 | `brightness_temp_field`, `density_field`, `neutral_fraction`, `galaxy_overdensity` | `(HII_DIM, HII_DIM, N_z)` lightcone fields (gzip-compressed) |
+| root attr `galaxy_weighting` | How `galaxy_overdensity` was built: `lightcone_sfr` (default), `number` (`N/<N> - 1`), or `luminosity` (`sum L_UV / <sum L_UV> - 1`) from the Euclid-selected catalogue. Set via `GALAXY_WEIGHTING` in `run_simulation.py`; the three modes are interchangeable downstream |
 | `lc_redshifts`, `lc_dist_Mpc` | Per-slice redshift and comoving distance |
 | `halo_catalog/{halo_masses, halo_coords, stellar_masses, sfr}` | Per-halo catalogue at `z_obs` (SFR in M☉ yr⁻¹) |
 | root attrs | Grid/box config, redshift range, galaxy bias, β_rsd, Euclid survey params, cosmology, HERA instrument params, wedge/binning settings |
@@ -163,7 +164,9 @@ it be recomputed without re-running the simulation.
 
 `lightcone_fields`, `lightcone_slice`, `halo_catalogue`, `sfr_relations`,
 `uv_luminosity_function`, `stellar_mass_muv`, `main_sequence`,
-`power_spectra_2d`, `cross_snr`, `uncertainty_budget`, `galaxy_bias`.
+`uv_selection_maps`, `power_spectra_2d`, `galaxy_wedge`,
+`wedge_real_space`, `cross_snr`, `uncertainty_budget`,
+`photoz_suppression`, `galaxy_bias`.
 
 ### `outputs/pipeline_summary.json` (Stage 4)
 

@@ -25,7 +25,7 @@ Madau & Dickinson (2014), ARA&A 52, 415 — UV–SFR calibration
 from __future__ import annotations
 
 import os
-from typing import Tuple
+from typing import Optional, Sequence, Tuple
 
 import matplotlib
 
@@ -38,12 +38,28 @@ from matplotlib.figure import Figure
 from scipy.ndimage import generic_filter
 
 try:  # local package import (repo root on sys.path)
-    from src.analysis import BiasEstimate, SNRResult, UncertaintyBudget
-    from src.conversions import sfr_to_Muv
+    from src.analysis import (
+        BiasEstimate,
+        SNRResult,
+        UncertaintyBudget,
+        deposit_halo_field,
+        foreground_wedge_mask,
+        photoz_damping_kernel,
+        select_euclid_halos,
+    )
+    from src.conversions import sfr_to_Luv, sfr_to_Muv
     from src.dataio import PowerSpectra, SimulationData
 except ImportError:  # direct import of the module (src/ on sys.path)
-    from analysis import BiasEstimate, SNRResult, UncertaintyBudget
-    from conversions import sfr_to_Muv
+    from analysis import (
+        BiasEstimate,
+        SNRResult,
+        UncertaintyBudget,
+        deposit_halo_field,
+        foreground_wedge_mask,
+        photoz_damping_kernel,
+        select_euclid_halos,
+    )
+    from conversions import sfr_to_Luv, sfr_to_Muv
     from dataio import PowerSpectra, SimulationData
 
 __all__ = [
@@ -58,7 +74,11 @@ __all__ = [
     "plot_uv_luminosity_function",
     "plot_stellar_mass_muv",
     "plot_main_sequence",
+    "plot_uv_selection_maps",
     "plot_power_spectra",
+    "plot_galaxy_wedge",
+    "plot_wedge_real_space",
+    "plot_photoz_suppression",
     "plot_snr",
     "plot_uncertainty_budget",
     "plot_bias_diagnostic",
@@ -832,6 +852,110 @@ def plot_main_sequence(
 #  Part 3 — power spectra and SNR
 # ===========================================================================
 
+def plot_uv_selection_maps(
+    data: SimulationData,
+    M_UV_bright: float = -22.0,
+    n_grid: int = 128,
+) -> Figure:
+    """
+    Where the Euclid-selected galaxies actually sit, and how bright they are.
+
+    The scaling-relation figures show *what* the selection keeps; this one
+    shows *where*.  Three panels — the projected UV luminosity of the whole
+    catalogue, the projected counts of the magnitude-selected sample, and the
+    selected magnitude distribution against the cuts that produced it.
+
+    Parameters
+    ----------
+    data : SimulationData
+        Loaded simulation with a non-empty halo catalogue.
+    M_UV_bright : float, optional
+        Bright-end magnitude cut.  The faint end comes from the stored
+        ``M_UV_limit`` attribute.
+    n_grid : int, optional
+        Transverse cells per side for the projected maps.
+
+    Returns
+    -------
+    Figure
+        The assembled 1 x 3 figure.
+    """
+    M_UV_faint = float(data.get("M_UV_limit", -18.0))
+
+    coords = _halo_coords_mpc(data)
+    sfr = np.asarray(data.sfr, dtype=float)
+
+    # The magnitude window is applied by src.analysis, the same call the bias
+    # stage makes, so this figure and the bias estimate select identically.
+    selection = select_euclid_halos(
+        sfr, np.asarray(data.halo_masses, dtype=float),
+        M_UV_faint=M_UV_faint, M_UV_bright=M_UV_bright,
+    )
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        luminosity = sfr_to_Luv(sfr)
+        magnitude = sfr_to_Muv(sfr)
+
+    finite = np.isfinite(luminosity) & (luminosity > 0)
+
+    # The projected maps are the LOS sum of the same 3D deposit that builds
+    # delta_gal (analysis.deposit_halo_field), so figure and field bin
+    # identically.  n_los=1 collapses the LOS axis at bin time.
+    def _project(mask: np.ndarray, weights: Optional[np.ndarray]) -> np.ndarray:
+        return deposit_halo_field(
+            coords[mask], box_len=data.BOX_LEN, n_perp=n_grid, n_los=1,
+            weights=weights,
+        )[:, :, 0]
+
+    luminosity_map = _project(finite, luminosity[finite])
+
+    # selection.mask indexes the valid (SFR > 0) subset; lift it back to
+    # full-catalogue indices to match `coords`.
+    valid = np.isfinite(sfr) & (sfr > 0) & (np.asarray(data.halo_masses, dtype=float) > 0)
+    selected_full = np.zeros(coords.shape[0], dtype=bool)
+    selected_full[np.flatnonzero(valid)[selection.mask]] = True
+
+    counts_map = _project(selected_full, None)
+
+    fig, axes = plt.subplots(1, 3, figsize=(19, 5.5))
+    extent_xy = [0, data.BOX_LEN, 0, data.BOX_LEN]
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        luminosity_display = np.log10(np.where(luminosity_map > 0, luminosity_map, np.nan))
+
+    im0 = axes[0].imshow(luminosity_display.T, origin="lower", extent=extent_xy,
+                         cmap="inferno")
+    fig.colorbar(im0, ax=axes[0], label=r"$\log_{10} \sum L_{\rm UV}$  [erg s$^{-1}$ Hz$^{-1}$]")
+    axes[0].set_title("Projected UV luminosity — all halos")
+
+    im1 = axes[1].imshow(counts_map.T, origin="lower", extent=extent_xy, cmap="viridis")
+    fig.colorbar(im1, ax=axes[1], label="Selected galaxies per cell")
+    axes[1].set_title(
+        rf"Projected selected counts  (${M_UV_bright} \leq M_{{\rm UV}} \leq {M_UV_faint}$)"
+    )
+
+    for ax in axes[:2]:
+        ax.set_xlabel("$x$  [Mpc]")
+        ax.set_ylabel("$y$  [Mpc]")
+
+    selected_mag = magnitude[selected_full]
+    if selected_mag.size:
+        axes[2].hist(selected_mag, bins=40, color="steelblue", alpha=0.8)
+    axes[2].axvline(M_UV_faint, color="crimson", ls="--", lw=1.5, label="faint cut")
+    axes[2].axvline(M_UV_bright, color="darkorange", ls="--", lw=1.5, label="bright cut")
+    axes[2].set_xlabel(r"$M_{\rm UV}$")
+    axes[2].set_ylabel("Number of galaxies")
+    axes[2].legend(fontsize=8)
+    axes[2].set_title("Selected magnitude distribution")
+
+    fig.suptitle(
+        rf"Euclid selection — {selection.n_selected:,} of {selection.n_valid:,} halos "
+        rf"at $z_{{\rm obs}} = {data.z_obs}$",
+        fontsize=13,
+    )
+    return fig
+
+
 def _add_wedge_lines(
     ax: plt.Axes,
     k_perp: np.ndarray,
@@ -996,6 +1120,254 @@ def plot_power_spectra(
         rf"Euclid $M_{{\rm UV}} < {data.get('M_UV_limit', -18.0):.0f}$)",
         fontsize=13,
     )
+    return fig
+
+
+def plot_galaxy_wedge(
+    spectra: PowerSpectra,
+    data: SimulationData,
+    horizon_slope: float,
+    fov_slope: float,
+) -> Figure:
+    """
+    The galaxy auto-power spectrum with the wedge region filled, not outlined.
+
+    Companion to :func:`plot_power_spectra`'s middle panel.  Drawing the wedge
+    as two lines leaves the eye to decide which side is excluded; shading and
+    hatching the contaminated region instead makes the accessible window
+    immediately legible.
+
+    Parameters
+    ----------
+    spectra : PowerSpectra
+        Provides ``P_galaxy_auto`` and the ``(k_perp, k_parallel)`` grid.
+    data : SimulationData
+        Loaded simulation, for the title metadata.
+    horizon_slope, fov_slope : float
+        Wedge slopes from ``src.analysis``.
+
+    Returns
+    -------
+    Figure
+        A single-panel figure.
+    """
+    k_perp = spectra.k_perp
+    k_parallel = spectra.k_parallel
+
+    fig, ax = plt.subplots(figsize=(7.5, 6))
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pgal_display = fill_nan_nearest(np.log10(np.abs(spectra.P_galaxy_auto.T)))
+
+    im = ax.pcolormesh(k_perp, k_parallel, pgal_display, cmap="plasma",
+                       shading="auto", zorder=1)
+    fig.colorbar(im, ax=ax, label=r"$\log_{10} |P_{\rm gal}|$  [Mpc³]")
+
+    # Wedge region: everything below the horizon line.  A dark overlay rather
+    # than a light one — on "plasma" a white wash brightens the already-bright
+    # low-k corner and the legend swatch disappears.
+    line = np.logspace(np.log10(k_perp.min()), np.log10(k_perp.max()), 200)
+    horizon_line = line * horizon_slope
+    ax.fill_between(
+        line, k_parallel[0], horizon_line,
+        where=horizon_line > k_parallel[0],
+        facecolor="black", alpha=0.35, hatch="///", edgecolor="white", lw=0.0,
+        zorder=2, label="Wedge (excluded)",
+    )
+    _add_wedge_lines(ax, k_perp, horizon_slope, fov_slope, "w", label=True)
+
+    _style_k_axes(ax, k_perp, k_parallel)
+    ax.set_title(
+        rf"Galaxy power spectrum with foreground wedge, "
+        rf"$z_{{\rm obs}} = {data.z_obs}$"
+    )
+    ax.legend(loc="upper left", fontsize=9, framealpha=0.85)
+    return fig
+
+
+def plot_wedge_real_space(
+    data: SimulationData,
+    horizon_slope: float,
+    wedge_buffer: float = 0.0,
+) -> Figure:
+    """
+    What foreground-wedge excision does to the galaxy field in real space.
+
+    The wedge is a statement about Fourier modes, but discarding them changes
+    the field itself.  This FFTs the 3D galaxy overdensity, zeroes every mode
+    inside the wedge, transforms back, and shows the same line-of-sight slice
+    before and after on a shared colour scale.
+
+    The surviving modes satisfy ``k_par > slope * k_perp`` with a slope of
+    order 3 at z ~ 7, i.e. they vary rapidly along the line of sight and
+    slowly across it — so the filtered field appears striped across the LOS
+    axis, with most of the original clumping gone.
+
+    Parameters
+    ----------
+    data : SimulationData
+        Supplies ``galaxy_overdensity`` and the box geometry.
+    horizon_slope : float
+        Wedge slope from :func:`src.analysis.horizon_wedge_slope`.
+    wedge_buffer : float, optional
+        Safety margin added above the wedge line [Mpc^-1].  Default 0.0, the
+        bare horizon boundary ``k_par <= slope * k_perp``.  The uncertainty
+        budget applies a non-zero buffer, so it discards slightly more than
+        this figure shows.
+
+    Returns
+    -------
+    Figure
+        The assembled 1 × 2 figure.
+    """
+    delta_gal = np.asarray(data.galaxy_overdensity, dtype=float)
+    n_x, n_y, n_z = delta_gal.shape
+
+    # Wavenumber grids for the non-cubic (N, N, N_z) lightcone box.
+    kx = np.fft.fftfreq(n_x, d=data.cell_size) * 2 * np.pi
+    ky = np.fft.fftfreq(n_y, d=data.cell_size) * 2 * np.pi
+    kz = np.fft.fftfreq(n_z, d=data.L_los / n_z) * 2 * np.pi
+
+    # The wedge condition factorises: k_perp varies over the transverse plane
+    # only, k_par over the LOS axis only.  So the (n_x*n_y, n_z) mask that
+    # foreground_wedge_mask returns for the flattened transverse plane
+    # reshapes straight back onto the 3D grid — no separate implementation of
+    # the boundary is needed here.
+    k_perp_plane = np.hypot(kx[:, np.newaxis], ky[np.newaxis, :])
+    outside_wedge = foreground_wedge_mask(
+        k_perp_plane.ravel(), np.abs(kz), horizon_slope, buffer=wedge_buffer,
+    ).reshape(n_x, n_y, n_z)
+
+    percent_excluded = 100.0 * (1.0 - outside_wedge.sum() / outside_wedge.size)
+
+    delta_filtered = np.fft.ifftn(
+        np.where(outside_wedge, np.fft.fftn(delta_gal), 0.0)
+    ).real
+
+    mid_y = n_y // 2
+    extent_los = [data.lc_dist_Mpc[0], data.lc_dist_Mpc[-1], 0, data.BOX_LEN]
+    vmax = float(np.percentile(np.abs(delta_gal), 99))
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 5), sharey=True)
+    panels = (
+        (delta_gal, r"Original  $\delta_{\rm gal}$"),
+        (delta_filtered,
+         rf"Wedge-filtered  ({percent_excluded:.1f}% of modes zeroed)"),
+    )
+    for ax, (field, title) in zip(axes, panels):
+        im = ax.imshow(
+            field[:, mid_y, :],
+            origin="lower", extent=extent_los, aspect="auto",
+            cmap="RdBu_r", vmin=-vmax, vmax=vmax,
+        )
+        ax.set_title(title)
+        ax.set_xlabel("Comoving distance  [Mpc]")
+
+    axes[0].set_ylabel(r"Transverse $x$  [Mpc]")
+    fig.colorbar(im, ax=axes, label=r"$\delta_{\rm gal}$",
+                 fraction=0.025, pad=0.02)
+    fig.suptitle(
+        rf"Foreground wedge in real space, $z_{{\rm obs}} = {data.z_obs}$   "
+        rf"({percent_excluded:.1f}% of modes excluded)",
+        fontsize=13,
+    )
+    return fig
+
+
+def plot_photoz_suppression(
+    budget: UncertaintyBudget,
+    data: SimulationData,
+    sigma_z_scenarios: Optional[Sequence[float]] = None,
+) -> Figure:
+    """
+    The photo-z damping kernel swept over a range of survey scenarios.
+
+    :func:`plot_uncertainty_budget`'s first panel shows ``W(k_par)`` for the
+    single adopted ``sigma_z``.  This one sweeps it, from the spectroscopic
+    limit (``sigma_z = 0``, ``sigma_r = 0``, ``W = 1`` everywhere) up to the
+    adopted value, so the cost of photometric redshifts is visible as a family
+    rather than a point.
+
+    ``sigma_r`` for each scenario is obtained by scaling the budget's own
+    ``radial_smearing`` — ``sigma_r = c sigma_z / H(z)`` is linear in
+    ``sigma_z``, so this is exact and cannot drift from the adopted value.
+
+    Parameters
+    ----------
+    budget : UncertaintyBudget
+        Supplies ``k_parallel``, the adopted ``photoz_uncertainty`` and its
+        ``radial_smearing``.
+    data : SimulationData
+        Loaded simulation, for the title metadata.
+    sigma_z_scenarios : sequence of float, optional
+        Absolute photo-z uncertainties to draw.  The adopted value is always
+        appended if absent.  Default ``(0, 0.02, 0.05, 0.10, 0.30)``.
+
+    Returns
+    -------
+    Figure
+        A single-panel figure.
+    """
+    k_parallel = budget.k_parallel
+    sigma_z_adopted = float(budget.photoz_uncertainty)
+
+    scenarios = list(sigma_z_scenarios if sigma_z_scenarios is not None
+                     else (0.0, 0.02, 0.05, 0.10, 0.30))
+    if not any(np.isclose(s, sigma_z_adopted) for s in scenarios):
+        scenarios.append(sigma_z_adopted)
+    scenarios.sort()
+
+    # sigma_r = c sigma_z / H(z) is linear in sigma_z, so scaling the budget's
+    # own value reproduces radial_smearing_length exactly for every scenario.
+    if sigma_z_adopted > 0:
+        sigma_r_per_sigma_z = budget.radial_smearing / sigma_z_adopted
+    else:  # degenerate configuration; nothing to scale
+        sigma_r_per_sigma_z = 0.0
+
+    colors = plt.cm.viridis_r(np.linspace(0.10, 0.95, len(scenarios)))
+
+    # Extend below the lowest sampled bin only when 1/sigma_r falls outside it,
+    # so the damping-scale marker stays on the axis.
+    sigma_r_adopted = float(budget.radial_smearing)
+    k_damp = 1.0 / sigma_r_adopted if sigma_r_adopted > 0 else k_parallel[0]
+    k_lo = min(k_parallel[0], k_damp) * 0.7
+    k_line = np.logspace(np.log10(k_lo), np.log10(k_parallel[-1]), 400)
+
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+
+    for sigma_z, color in zip(scenarios, colors):
+        sigma_r = sigma_z * sigma_r_per_sigma_z
+        kernel = photoz_damping_kernel(k_line, sigma_r).ravel()
+
+        adopted = np.isclose(sigma_z, sigma_z_adopted)
+        label = rf"$\sigma_z = {sigma_z:g}$"
+        label += "  (spectroscopic)" if sigma_z == 0.0 else \
+                 rf",  $\sigma_r = {sigma_r:.0f}$ Mpc"
+        if adopted:
+            label += "  — adopted"
+
+        ax.plot(k_line, kernel, color=color, lw=2.4 if adopted else 1.5,
+                zorder=3 if adopted else 2, label=label)
+
+    if k_damp < k_parallel[0]:
+        ax.axvspan(k_lo, k_parallel[0], color="0.5", alpha=0.12, lw=0, zorder=0,
+                   label=r"below the box $k_\parallel$ range")
+    ax.axvline(k_damp, color="k", ls="--", lw=1.2, alpha=0.8, zorder=4)
+    ax.text(
+        k_damp * 1.45, 0.26,
+        rf"$1/\sigma_r = {k_damp:.3f}$ Mpc$^{{-1}}$" "\n"
+        rf"($\sigma_z = {sigma_z_adopted:g}$)",
+        fontsize=9, va="top", ha="left", zorder=5,
+        bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="none", alpha=0.85),
+    )
+
+    ax.set_xscale("log")
+    ax.set_xlim(k_lo, k_parallel[-1])
+    ax.set_ylim(0, 1.05)
+    ax.set_xlabel(r"$k_\parallel$  [Mpc$^{-1}$]")
+    ax.set_ylabel(r"$W(k_\parallel)$")
+    ax.set_title(rf"Photo-$z$ suppression, $z_{{\rm obs}} = {data.z_obs}$")
+    ax.legend(loc="upper right", fontsize=8, framealpha=0.9)
     return fig
 
 

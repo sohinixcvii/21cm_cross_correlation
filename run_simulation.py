@@ -52,13 +52,21 @@ if REPO_ROOT not in sys.path:
 # the AB zero point, and 21cmFAST's star-formation timescale. Using these
 # rather than local copies keeps Part 1 consistent with the analysis stage.
 from src.analysis import (
+    GALAXY_WEIGHTING_MODES,
     T_STAR_DEFAULT,
     effective_galaxy_bias,
+    galaxy_overdensity_from_catalogue,
     select_euclid_halos,
     star_formation_timescale,
     stellar_mass_to_sfr,
 )
-from src.conversions import Muv_to_Luv, cell_mass, sfr_to_Luv, sheth_tormen_bias
+from src.conversions import (
+    Muv_to_Luv,
+    cell_mass,
+    sfr_to_Luv,
+    sheth_tormen_bias,
+    survey_area_to_box_size,
+)
 
 # ── Check whether 21cmFAST is installed ──────────────────────────────────────
 try:
@@ -87,11 +95,48 @@ except ImportError:
 # ===========================================================================
 
 # ---------------------------------------------------------------------------
-#  Simulation grid
+#  Survey footprint  ->  simulation box geometry
 # ---------------------------------------------------------------------------
-HII_DIM = 128        # cells per side (low-res grid)
-BOX_LEN = 256.0      # comoving box side length [Mpc]
-DIM     = 3 * HII_DIM  # high-res grid for initial conditions
+# The box is sized from the survey being forecast rather than chosen by hand.
+# Euclid Deep Field Fornax: 10 deg^2, centred RA 03:31:43.6, Dec -28:05:18.6.
+SURVEY_AREA_DEG2 = 10.0     # Euclid Deep Field Fornax footprint  [deg^2]
+SURVEY_Z_CENTRAL = 7.0      # central redshift of the analysis
+
+# sigma_z is the *absolute* photometric redshift error, not sigma_z/(1+z):
+# radial_smearing_length() computes sigma_r = c sigma_z / H(z) directly.
+# 0.45 at z_obs = 7 corresponds to sigma_z/(1+z) = 0.056, consistent with the
+# Euclid photometric requirement sigma_z/(1+z) < 0.05. The previous value of
+# 0.059 was the fractional quantity used as if it were absolute, which
+# understated sigma_r by a factor ~7.6.
+# Defined here, not in the Euclid block below, because it now also sets the
+# line-of-sight depth of the box.
+photoz_uncertainty = 0.45   # sigma_z photometric redshift error (absolute)
+
+# CHOICE, not a default: how many sigma_z of photo-z scatter the box spans.
+# PHOTOZ_N_SIGMA = 1 -> delta_z = 0.90, z = 6.55-7.45, L_los = 315.6 Mpc
+# PHOTOZ_N_SIGMA = 2 -> delta_z = 1.80, z = 6.10-7.90, L_los = 634.9 Mpc
+# The forecast adopts +/-1 sigma; raising this widens the LOS extent but
+# pushes further from the quasi-coeval regime the estimator assumes.
+PHOTOZ_N_SIGMA = 1
+SURVEY_DELTA_Z = 2 * PHOTOZ_N_SIGMA * photoz_uncertainty
+
+# ---------------------------------------------------------------------------
+#  Simulation grid  (derived — do not hardcode BOX_LEN/HII_DIM/DIM)
+# ---------------------------------------------------------------------------
+# HII_DIM follows from target_cell_size_mpc = 2.0, the resolution of the old
+# 256 Mpc / 128^3 grid, so covering the footprint does not coarsen M_cell.
+# 486.33 / 2.0 = 244 cells, snapped up to the next power of two for the FFTs.
+SIM_BOX = survey_area_to_box_size(
+    area_deg2=SURVEY_AREA_DEG2,
+    z_central=SURVEY_Z_CENTRAL,
+    delta_z=SURVEY_DELTA_Z,
+    cosmo=None,              # -> astropy Planck18, as used for the endpoints
+    target_cell_size_mpc=2.0,
+)
+
+HII_DIM = SIM_BOX.hii_dim    # 256 cells per side (low-res grid)
+BOX_LEN = SIM_BOX.box_len    # 486.33 Mpc comoving, from the 10 deg^2 footprint
+DIM     = SIM_BOX.dim        # 768, high-res grid for initial conditions
 
 # ---------------------------------------------------------------------------
 #  Lightcone redshift range
@@ -109,6 +154,15 @@ DIM     = 3 * HII_DIM  # high-res grid for initial conditions
 # redshift-evolving data and the resulting spectra are not trustworthy.
 #
 # DO NOT widen this range without doing TODO.md P0.1 and P0.2 first.
+#
+# The survey footprint implies a much wider range -- SIM_BOX.z_min/z_max =
+# 6.55/7.45 (delta_z = 0.90, L_LOS = 315.6 Mpc) from the photo-z depth above.
+# That is the range this forecast *should* run once TODO.md P0 lands; the
+# transverse box size is already sized for it. Until then the slab below
+# deliberately overrides it, so only BOX_LEN/HII_DIM/DIM are footprint-driven.
+SURVEY_Z_MIN = SIM_BOX.z_min   # 6.55 — survey-derived, not used yet
+SURVEY_Z_MAX = SIM_BOX.z_max   # 7.45 — survey-derived, not used yet
+
 z_min = 6.995          # nearest redshift (low-z end of lightcone)
 z_max = 7.005          # farthest redshift (high-z end)
 
@@ -116,14 +170,40 @@ z_max = 7.005          # farthest redshift (high-z end)
 #  Euclid-like survey parameters
 # ---------------------------------------------------------------------------
 M_UV_limit          = -18    # UV absolute magnitude cut
-# sigma_z is the *absolute* photometric redshift error, not sigma_z/(1+z):
-# radial_smearing_length() computes sigma_r = c sigma_z / H(z) directly.
-# 0.45 at z_obs = 7 corresponds to sigma_z/(1+z) = 0.056, consistent with the
-# Euclid photometric requirement sigma_z/(1+z) < 0.05. The previous value of
-# 0.059 was the fractional quantity used as if it were absolute, which
-# understated sigma_r by a factor ~7.6.
-photoz_uncertainty  = 0.45   # sigma_z photometric redshift error (absolute)
+# Absolute UV magnitude window (more negative = brighter). Defined here
+# because both the galaxy-field construction (section 3b) and the bias
+# estimate (section 4) select on it.
+M_UV_bright         = -22
+M_UV_faint          = M_UV_limit
+# photoz_uncertainty (sigma_z = 0.45, absolute) is set in the survey-footprint
+# block above, because it now also sets the line-of-sight depth of the box.
 mean_galaxy_density = 3e-3   # n_bar  [h^3 Mpc^-3]
+
+# ---------------------------------------------------------------------------
+#  How the galaxy overdensity field is weighted
+# ---------------------------------------------------------------------------
+# "lightcone_sfr" (default) — delta_gal from the lightcone `halo_sfr` field,
+#     i.e. the per-cell SFR density integrated over all halos.  This is the
+#     original behaviour and the only mode that evolves along the LOS.
+#
+# "number" — delta_gal = N / <N> - 1 from the Euclid-selected halo catalogue.
+#     One unit of weight per detectable galaxy.
+#
+# "luminosity" — delta_gal,L = sum(L_UV) / <sum(L_UV)> - 1 from the same
+#     selected catalogue, weighting each halo by its own UV luminosity
+#     (L_UV = SFR / kappa_UV, Madau & Dickinson 2014).
+#
+# The two catalogue modes are interchangeable: identical grid, identical
+# normalisation, identical downstream handling.  They are built from the
+# *coeval* catalogue at z_obs, which spans BOX_LEN along the LOS rather than
+# L_los, so they do not carry the lightcone's redshift evolution.
+GALAXY_WEIGHTING = "lightcone_sfr"   # lightcone_sfr | number | luminosity
+
+if GALAXY_WEIGHTING not in ("lightcone_sfr",) + GALAXY_WEIGHTING_MODES:
+    raise ValueError(
+        f"GALAXY_WEIGHTING must be 'lightcone_sfr', 'number' or 'luminosity', "
+        f"got {GALAXY_WEIGHTING!r}"
+    )
 
 # ---------------------------------------------------------------------------
 #  Galaxy bias (default; overwritten below if HMF estimation succeeds)
@@ -225,7 +305,12 @@ n_nodes        = max(int(round(10 * (z_max - z_min))), 5)
 node_redshifts = np.linspace(z_max, z_min, n_nodes)   # high-z → low-z
 
 # ── Summary ──────────────────────────────────────────────────────────────────
-print(f"Box         : {BOX_LEN:.0f} Mpc,  {HII_DIM}³ cells  →  cell size = {cell_size:.1f} Mpc")
+print(f"Box         : {BOX_LEN:.1f} Mpc,  {HII_DIM}³ cells  →  cell size = {cell_size:.2f} Mpc")
+print(f"Footprint   : {SURVEY_AREA_DEG2:g} deg² at z = {SURVEY_Z_CENTRAL:g}  →  "
+      f"BOX_LEN = {BOX_LEN:.1f} Mpc  (Euclid Deep Field Fornax)")
+print(f"Survey LOS  : Δz = {SURVEY_DELTA_Z:g} (±{PHOTOZ_N_SIGMA}σ_z)  →  "
+      f"z = {SURVEY_Z_MIN:.2f}–{SURVEY_Z_MAX:.2f}, L_LOS = {SIM_BOX.los_depth:.1f} Mpc "
+      f"[overridden by the smoke-test slab below]")
 print(f"Mass res.   : {M_cell_hires:.3e} M⊙/cell (DIM={DIM}, {hires_cell_size:.3f} Mpc)  |  "
       f"{M_cell_lores:.3e} M⊙/cell (HII_DIM={HII_DIM}, {cell_size:.2f} Mpc)")
 print(f"Lightcone   : z = {z_min} → {z_max}   (reference z_obs = {z_obs})")
@@ -431,7 +516,49 @@ else:
 
 cell_volume = cell_size**3
 
-if HAS_21CMFAST:
+if HAS_21CMFAST and GALAXY_WEIGHTING in GALAXY_WEIGHTING_MODES:
+    # ── Catalogue-based field: number- or luminosity-weighted ─────────────
+    # Both modes go through galaxy_overdensity_from_catalogue(), which
+    # applies the Euclid magnitude window and deposits the survivors onto a
+    # (HII_DIM, HII_DIM, N_z) grid. The only difference is the per-halo
+    # weight: 1 for "number", L_UV = SFR / kappa_UV for "luminosity".
+    print(f"\nConstructing {GALAXY_WEIGHTING}-weighted galaxy field "
+          f"from the halo catalogue …")
+
+    # Convert halo_coords to Mpc using the same convention as
+    # figures._halo_coords_mpc(), so this deposit and the diagnostic
+    # projection maps bin identical positions.
+    if halo_coords.size and halo_coords.max() <= HII_DIM + 1:
+        halo_coords_mpc = halo_coords * cell_size
+    else:
+        halo_coords_mpc = halo_coords
+
+    galaxy_overdensity, galaxy_selection = galaxy_overdensity_from_catalogue(
+        coords=halo_coords_mpc,
+        sfr=sfr_cat,
+        halo_masses=halo_masses,
+        box_len=BOX_LEN,
+        n_perp=HII_DIM,
+        n_los=N_z,
+        los_extent=BOX_LEN,
+        weighting=GALAXY_WEIGHTING,
+        M_UV_faint=M_UV_faint,
+        M_UV_bright=M_UV_bright,
+    )
+
+    print(f"  Euclid window : {M_UV_bright} < M_UV < {M_UV_faint}")
+    print(f"  Halos SFR > 0 : {galaxy_selection.n_valid:,}")
+    print(f"  Deposited     : {galaxy_selection.n_selected:,} galaxies")
+    print(f"  Grid          : {galaxy_overdensity.shape}, "
+          f"LOS extent {BOX_LEN:.1f} Mpc (coeval box, not L_los)")
+    print(f"  Galaxy δ      : [{galaxy_overdensity.min():.2f}, {galaxy_overdensity.max():.2f}]")
+    print(f"  Shot-noise n̄  : {mean_galaxy_density:.2e} h³ Mpc⁻³  (survey parameter)")
+
+    if galaxy_selection.n_selected == 0:
+        print("  WARNING: no halo passed the magnitude cut — δ_gal is identically zero.")
+
+elif HAS_21CMFAST:
+    # ── Default: the lightcone halo_sfr field ─────────────────────────────
     print("\nConstructing galaxy density field from lightcone halobox …")
 
     sfr_field = lightcone.lightcones["halo_sfr"]   # (HII_DIM, HII_DIM, N_z)
@@ -488,9 +615,8 @@ else:
 # whenever a halo catalogue exists, so the bias stored here matches the one
 # the analysis stage reports.
 
-# ── Euclid absolute UV magnitude limits (more negative = brighter) ────────────
-M_UV_bright = -22
-M_UV_faint  = M_UV_limit
+# ── Euclid absolute UV magnitude limits ───────────────────────────────────────
+# M_UV_bright / M_UV_faint are set with the other survey parameters above.
 
 # ── 21cmFAST star-formation timescale at the reference redshift ──────────────
 t_sf_yr = star_formation_timescale(
@@ -739,8 +865,18 @@ with h5py.File(OUTPUT_FILE, "w") as f:
     f.attrs["sfr_timescale_yr"]    = t_sf_yr
     f.attrs["beta_rsd"]            = beta_rsd
     f.attrs["mean_galaxy_density"] = mean_galaxy_density
+    f.attrs["galaxy_weighting"]    = GALAXY_WEIGHTING
     f.attrs["photoz_uncertainty"]  = photoz_uncertainty
     f.attrs["M_UV_limit"]          = M_UV_limit
+    # ── Survey footprint provenance of the box geometry ──────────────────
+    f.attrs["survey_area_deg2"]    = SURVEY_AREA_DEG2
+    f.attrs["survey_z_central"]    = SURVEY_Z_CENTRAL
+    f.attrs["survey_delta_z"]      = SURVEY_DELTA_Z
+    f.attrs["photoz_n_sigma"]      = PHOTOZ_N_SIGMA
+    f.attrs["survey_z_min"]        = SURVEY_Z_MIN
+    f.attrs["survey_z_max"]        = SURVEY_Z_MAX
+    f.attrs["survey_los_depth"]    = SIM_BOX.los_depth
+    f.attrs["survey_field"]        = "Euclid Deep Field Fornax"
     f.attrs["OMEGA_M_0"]           = OMEGA_M_0
     f.attrs["HUBBLE_CONSTANT"]     = HUBBLE_CONSTANT
     f.attrs["SPEED_OF_LIGHT_KMS"]  = SPEED_OF_LIGHT_KMS

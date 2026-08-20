@@ -438,6 +438,7 @@ def figure_stage(
     output_dir: str,
     fmt: str = "png",
     quiet: bool = False,
+    m_uv_bright: float = -22.0,
 ) -> List[str]:
     """
     Render and save the requested figure groups.
@@ -460,6 +461,9 @@ def figure_stage(
         File format (``png``, ``pdf``, ``svg``).
     quiet : bool, optional
         Suppress progress output.
+    m_uv_bright : float, optional
+        Bright-end Euclid magnitude cut, passed to the selection-map figure so
+        it selects identically to the bias stage.
 
     Returns
     -------
@@ -491,6 +495,9 @@ def figure_stage(
             emit("uv_luminosity_function", figures.plot_uv_luminosity_function(data))
             emit("stellar_mass_muv", figures.plot_stellar_mass_muv(data))
             emit("main_sequence", figures.plot_main_sequence(data))
+            emit("uv_selection_maps", figures.plot_uv_selection_maps(
+                data, M_UV_bright=m_uv_bright,
+            ))
         else:
             log("  (no halo catalogue — skipping scaling-relation figures)", quiet)
 
@@ -499,6 +506,17 @@ def figure_stage(
             spectra, data,
             horizon_slope=budget.horizon_slope,
             fov_slope=budget.fov_slope,
+        ))
+        emit("galaxy_wedge", figures.plot_galaxy_wedge(
+            spectra, data,
+            horizon_slope=budget.horizon_slope,
+            fov_slope=budget.fov_slope,
+        ))
+        # Real-space counterpart.  buffer=0 draws the bare horizon boundary,
+        # matching the line plot_galaxy_wedge overlays; the budget's own
+        # excision adds wedge_buffer on top of it.
+        emit("wedge_real_space", figures.plot_wedge_real_space(
+            data, horizon_slope=budget.horizon_slope, wedge_buffer=0.0,
         ))
 
     if "snr" in groups:
@@ -510,6 +528,7 @@ def figure_stage(
 
     if "budget" in groups:
         emit("uncertainty_budget", figures.plot_uncertainty_budget(budget, data))
+        emit("photoz_suppression", figures.plot_photoz_suppression(budget, data))
 
     if "bias" in groups:
         if bias is not None:
@@ -906,6 +925,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 output_dir=args.figdir,
                 fmt=args.format,
                 quiet=quiet,
+                m_uv_bright=args.m_uv_bright,
             )
         else:
             log("\n  Figures skipped (--plots none).", quiet)

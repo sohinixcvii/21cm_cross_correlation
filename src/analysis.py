@@ -72,6 +72,9 @@ __all__ = [
     "euclid_sfr_window",
     "select_euclid_halos",
     "effective_galaxy_bias",
+    "deposit_halo_field",
+    "galaxy_overdensity_from_catalogue",
+    "GALAXY_WEIGHTING_MODES",
     "EuclidSelection",
     "BiasEstimate",
     "SNRResult",
@@ -1323,3 +1326,211 @@ def effective_galaxy_bias(
         log10_selected_mass_h=log10_selected_mass_h,
         n_selected=selection.n_selected,
     )
+
+
+# ===========================================================================
+# 9  Galaxy overdensity from the halo catalogue
+# ===========================================================================
+#
+# The Euclid-selected halo catalogue can be deposited onto the simulation
+# grid with two different weights, and the choice matters physically:
+#
+#   "number"     — every selected halo contributes 1, so delta_gal traces
+#                  the *abundance* of detectable galaxies.  This is the
+#                  quantity a galaxy clustering measurement counts.
+#
+#   "luminosity" — every selected halo contributes its own L_UV, so
+#                  delta_gal traces the *UV emissivity*.  Bright halos are
+#                  up-weighted, which is closer to what a flux-limited
+#                  intensity-mapping style measurement responds to.
+#
+# L_UV comes from sfr_to_Luv() (Madau & Dickinson 2014, kappa_UV =
+# 1.15e-28); this module only consumes it.
+
+GALAXY_WEIGHTING_MODES: Tuple[str, ...] = ("number", "luminosity")
+
+
+def deposit_halo_field(
+    coords: np.ndarray,
+    box_len: float,
+    n_perp: int,
+    n_los: Optional[int] = None,
+    los_extent: Optional[float] = None,
+    weights: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """
+    Deposit halos onto a regular 3D grid by nearest-cell (CIC-free) binning.
+
+    This is the 3D generalisation of the projected map built by
+    ``figures.plot_uv_selection_maps``: a plain histogram of halo positions,
+    optionally weighted per halo.
+
+    Parameters
+    ----------
+    coords : ndarray
+        Halo positions of shape ``(N_halos, 3)`` in Mpc.
+    box_len : float
+        Transverse box side length [Mpc]; sets the ``x`` and ``y`` extent.
+    n_perp : int
+        Number of transverse cells per side.
+    n_los : int, optional
+        Number of line-of-sight cells.  Defaults to ``n_perp`` (cubic grid).
+    los_extent : float, optional
+        Line-of-sight extent [Mpc].  Defaults to ``box_len``.
+    weights : ndarray, optional
+        Per-halo weight of shape ``(N_halos,)``.  ``None`` means unit
+        weights, i.e. a pure number count.
+
+    Returns
+    -------
+    ndarray
+        Grid of shape ``(n_perp, n_perp, n_los)`` holding the summed weight
+        per cell.
+
+    Raises
+    ------
+    ValueError
+        If ``coords`` is not ``(N, 3)``, or ``weights`` has a different
+        length than ``coords``.
+    """
+    coords = np.asarray(coords, dtype=float)
+    if coords.ndim != 2 or coords.shape[1] != 3:
+        raise ValueError(f"coords must have shape (N_halos, 3), got {coords.shape}")
+
+    n_los = int(n_perp) if n_los is None else int(n_los)
+    los_extent = float(box_len) if los_extent is None else float(los_extent)
+
+    if weights is not None:
+        weights = np.asarray(weights, dtype=float)
+        if weights.shape[0] != coords.shape[0]:
+            raise ValueError(
+                f"weights and coords length mismatch: "
+                f"{weights.shape[0]} vs {coords.shape[0]}"
+            )
+
+    if coords.shape[0] == 0:
+        return np.zeros((int(n_perp), int(n_perp), n_los), dtype=float)
+
+    edges = (
+        np.linspace(0.0, float(box_len), int(n_perp) + 1),
+        np.linspace(0.0, float(box_len), int(n_perp) + 1),
+        np.linspace(0.0, los_extent, n_los + 1),
+    )
+    field, _ = np.histogramdd(coords, bins=edges, weights=weights)
+    return field
+
+
+def galaxy_overdensity_from_catalogue(
+    coords: np.ndarray,
+    sfr: np.ndarray,
+    halo_masses: np.ndarray,
+    box_len: float,
+    n_perp: int,
+    n_los: Optional[int] = None,
+    los_extent: Optional[float] = None,
+    weighting: str = "number",
+    M_UV_faint: float = -18.0,
+    M_UV_bright: float = -22.0,
+    apply_selection: bool = True,
+) -> Tuple[np.ndarray, EuclidSelection]:
+    """
+    Galaxy overdensity field from the halo catalogue, number- or L_UV-weighted.
+
+    Both modes deposit the same halos onto the same grid and normalise the
+    same way; only the per-halo weight differs::
+
+        "number"      delta_gal   = N / <N> - 1
+        "luminosity"  delta_gal,L = sum(L_UV) / <sum(L_UV)> - 1
+
+    The two results are therefore interchangeable downstream — same shape,
+    same zero mean, same units (dimensionless).
+
+    Parameters
+    ----------
+    coords : ndarray
+        Halo positions of shape ``(N_halos, 3)`` in Mpc.
+    sfr : ndarray
+        Per-halo star-formation rate [M_sun yr^-1].
+    halo_masses : ndarray
+        Per-halo mass [M_sun].
+    box_len : float
+        Transverse box side length [Mpc].
+    n_perp : int
+        Transverse cells per side.
+    n_los : int, optional
+        Line-of-sight cells.  Defaults to ``n_perp``.
+    los_extent : float, optional
+        Line-of-sight extent [Mpc].  Defaults to ``box_len``.
+    weighting : {'number', 'luminosity'}, optional
+        Per-halo weight.  ``'number'`` (default) reproduces the existing
+        number-count field; ``'luminosity'`` weights by ``sfr_to_Luv(sfr)``.
+    M_UV_faint, M_UV_bright : float, optional
+        Euclid magnitude window passed to :func:`select_euclid_halos`.
+    apply_selection : bool, optional
+        Apply the Euclid magnitude window before depositing.  ``False``
+        deposits every halo with SFR > 0.
+
+    Returns
+    -------
+    delta_gal : ndarray
+        Overdensity of shape ``(n_perp, n_perp, n_los)``.  All-zero if no
+        halo survives the selection or the mean weight is zero.
+    selection : EuclidSelection
+        The selection actually applied, for diagnostics and logging.
+
+    Raises
+    ------
+    ValueError
+        If ``weighting`` is not one of ``GALAXY_WEIGHTING_MODES``, or the
+        catalogue arrays have inconsistent lengths.
+
+    Notes
+    -----
+    ``L_UV`` is obtained from :func:`src.conversions.sfr_to_Luv`, i.e.
+    ``L_UV = SFR / kappa_UV`` with ``kappa_UV = 1.15e-28`` (Madau &
+    Dickinson 2014).  Because that conversion is a constant rescaling, the
+    luminosity-weighted field is identical to an SFR-weighted one; it
+    differs from the number-weighted field only through the per-halo
+    spread in SFR.
+    """
+    if weighting not in GALAXY_WEIGHTING_MODES:
+        raise ValueError(
+            f"weighting must be one of {GALAXY_WEIGHTING_MODES}, got {weighting!r}"
+        )
+
+    coords = np.asarray(coords, dtype=float)
+    sfr = np.asarray(sfr, dtype=float)
+    halo_masses = np.asarray(halo_masses, dtype=float)
+
+    if not (coords.shape[0] == sfr.shape[0] == halo_masses.shape[0]):
+        raise ValueError(
+            f"catalogue length mismatch: coords={coords.shape[0]}, "
+            f"sfr={sfr.shape[0]}, halo_masses={halo_masses.shape[0]}"
+        )
+
+    selection = select_euclid_halos(
+        sfr, halo_masses, M_UV_faint=M_UV_faint, M_UV_bright=M_UV_bright,
+    )
+
+    # select_euclid_halos masks *within* the valid (SFR > 0, M > 0) subset,
+    # so lift its mask back to full-catalogue indices before slicing coords.
+    sfr_clean = np.where(np.isfinite(sfr), sfr, 0.0)
+    valid = (sfr_clean > 0) & (halo_masses > 0)
+    keep = np.zeros(coords.shape[0], dtype=bool)
+    if apply_selection:
+        keep[np.flatnonzero(valid)[selection.mask]] = True
+    else:
+        keep = valid
+
+    weights = sfr_to_Luv(sfr_clean[keep]) if weighting == "luminosity" else None
+
+    field = deposit_halo_field(
+        coords[keep], box_len=box_len, n_perp=n_perp,
+        n_los=n_los, los_extent=los_extent, weights=weights,
+    )
+
+    mean_weight = float(field.mean())
+    if mean_weight <= 0.0:
+        return np.zeros_like(field), selection
+
+    return field / mean_weight - 1.0, selection

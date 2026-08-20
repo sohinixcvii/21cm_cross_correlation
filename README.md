@@ -64,7 +64,7 @@ Run `python run_pipeline.py --help` for the full list.
 |------|----------|
 | `outputs/lightcone_data.h5` | Simulation fields, halo catalogue, and metadata (Part 1) |
 | `outputs/analysis_products.h5` | Cached $P_{21}$, $P_\mathrm{gal}$, $P_{21\times\mathrm{gal}}$ and the $k$-grid, plus the `uncertainty_budget` group (damped spectra, wedge mask, $\sigma$ terms, per-mode SNR) |
-| `outputs/figures/*.png` | 11 figures: `lightcone_fields`, `lightcone_slice`, `halo_catalogue`, `sfr_relations`, `uv_luminosity_function`, `stellar_mass_muv`, `main_sequence`, `power_spectra_2d`, `cross_snr`, `uncertainty_budget`, `galaxy_bias` |
+| `outputs/figures/*.png` | 15 figures: `lightcone_fields`, `lightcone_slice`, `halo_catalogue`, `sfr_relations`, `uv_luminosity_function`, `stellar_mass_muv`, `main_sequence`, `uv_selection_maps`, `power_spectra_2d`, `galaxy_wedge`, `wedge_real_space`, `cross_snr`, `uncertainty_budget`, `photoz_suppression`, `galaxy_bias` |
 | `outputs/pipeline_summary.json` | Scalar results: $\langle x_\mathrm{HI}\rangle$, wedge slopes, $\sigma_r$, total SNR, $\langle b_g\rangle$, selection counts |
 
 > **Note:** `submit_job.sh` is a plain shell wrapper — it contains no `#SBATCH`
@@ -230,7 +230,7 @@ End-to-end HERA × Euclid cross-correlation workflow using 21cmFASTv4 with the d
 | `BOX_LEN` | 256 Mpc | Comoving box size |
 | $z_\mathrm{obs}$ | 6.5 | Observing redshift |
 | $M_\mathrm{UV}$ limit | $< -18$ | Euclid galaxy selection |
-| $\sigma_z$ | 0.059 | Euclid photo-$z$ uncertainty |
+| $\sigma_z$ | 0.059 | Euclid photo-$z$ uncertainty (as run; this archived coeval notebook predates the absolute-vs-fractional fix) |
 | $\bar{n}_\mathrm{gal}$ | $3\times10^{-3}\ h^3\ \mathrm{Mpc}^{-3}$ | Mean galaxy number density |
 | $b_\mathrm{gal}$ | 8 | Galaxy bias |
 | $N_\mathrm{ant}$ dish diameter | 14 m | HERA antenna diameter |
@@ -279,7 +279,26 @@ Section numbers below match the notebook's own headers.
   redshift), and observed frequency range in the title
 - **6** Compute 2D cylindrical power spectra (non-cubic box)
 - **7** Plot power spectra with foreground wedge overlays
-- **8** Photo-$z$ damping and foreground wedge excision
+- **7b** Photo-$z$ suppression — the damping kernel
+  $W(k_\parallel) = e^{-k_\parallel^2\sigma_r^2/2}$ swept over
+  $\sigma_z \in \{0,\,0.02,\,0.05,\,0.10,\,0.30,\,0.45\}$, from the
+  spectroscopic limit ($\sigma_r = 0$, $W \equiv 1$) to the adopted Euclid
+  Wide value, with $1/\sigma_r$ marked. Both $\sigma_r$ and $W$ come from
+  `src.analysis.radial_smearing_length` / `photoz_damping_kernel` — the same
+  two functions `compute_uncertainty_budget()` applies in §8
+- **7c** Galaxy power spectrum against the foreground wedge — $P_\mathrm{gal}$
+  alone, with the wedge region **filled and hatched** rather than only
+  outlined, so excluded modes are distinguishable from the accessible window at
+  a glance. Reuses §7's `horizon_slope`, `fov_wedge_slope_value` and wedge lines
+- **7d** The wedge in **real** space — the 3D galaxy overdensity FFT'd, every
+  mode with $k_\parallel \le m_{\rm horizon} k_\perp$ zeroed, and
+  inverse-transformed back; the same LOS slice shown before and after on a
+  shared colour scale, titled with the percentage of modes removed. The mask is
+  `src.analysis.foreground_wedge_mask` reshaped onto §4's `KX/KY/KZ` grids.
+  **97.4 % of the 3D modes fall inside the bare horizon wedge** at $z = 7$ on
+  the fiducial $(128, 128, 175)$ grid
+- **8** The uncertainty budget — photo-$z$ damping, wedge excision, noise and
+  SNR in a single `compute_uncertainty_budget()` call
 - **9** Per-mode SNR map and total detection significance
 - **10** Summary — coeval vs. lightcone comparison table and next-step recommendations
 
@@ -297,14 +316,15 @@ Section numbers below match the notebook's own headers.
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| `HII_DIM` | 128 | Simulation grid cells per side |
-| `BOX_LEN` | 256 Mpc | Transverse box size |
-| $z_\mathrm{min}$, $z_\mathrm{max}$ | 6.5, 7.5 | Lightcone redshift range |
+| `HII_DIM` | **256** | Simulation grid cells per side — *derived*, not hardcoded (see below) |
+| `BOX_LEN` | **486.33 Mpc** | Transverse box size — *derived* from the 10 deg² Euclid Deep Field Fornax footprint at $z=7$ |
+| `DIM` | `3 × HII_DIM` = **768** | High-res grid for initial conditions |
+| $z_\mathrm{min}$, $z_\mathrm{max}$ | **6.55, 7.45** | Lightcone redshift range — *derived* from $\Delta z = 2\sigma_z = 0.90$ (±1σ) |
 | $z_\mathrm{obs}$ | 7.0 | Reference redshift (midpoint of lightcone) |
 | $M_\mathrm{UV}$ limit | $< -18$ | Euclid galaxy selection |
-| $\sigma_z$ | 0.059 | Euclid photo-$z$ uncertainty |
+| $\sigma_z$ | 0.45 | Euclid photo-$z$ uncertainty, **absolute — not $\sigma_z/(1+z)$**. Euclid's $\sigma_z/(1+z) < 0.05$ requirement is $\sigma_z \approx 0.45$ at $z = 7$; the earlier 0.059 was the fractional number used as though absolute |
 | $\bar{n}_\mathrm{gal}$ | $3\times10^{-3}\ h^3\ \mathrm{Mpc}^{-3}$ | Mean galaxy number density |
-| $b_\mathrm{gal}$ | 8 | Galaxy bias fallback; Sheth-Tormen HMF integral over the Euclid magnitude range used if `hmf` is installed |
+| $b_\mathrm{gal}$ | **computed in-line**, $\approx 5.39$ | No fixed fallback — `galaxy_bias = 8` is commented out in the configuration cell. The value is calculated in **§3**, the analytic-galaxy-bias cell (`galaxy_bias = galaxy_bias_hmf`): a Simpson integral of the Sheth-Tormen halo bias weighted by the HMF over the Euclid-selected mass bins, $b_g = \int b_h\,\frac{dn}{d\log M}\,d\log M \big/ \int \frac{dn}{d\log M}\,d\log M$. Consumed downstream by §4's $\beta = f/b$. Requires `hmf` |
 | $t_\mathrm{obs}$ | 1000 h | Integration time |
 | Bandwidth | 8 MHz | HERA per-band bandwidth |
 
@@ -318,9 +338,11 @@ A refactored version of notebook 3 split into three independent parts for cluste
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| `HII_DIM` | 128 | Simulation grid cells per side |
-| `BOX_LEN` | 256 Mpc | Transverse box size |
-| `DIM` | `3 × HII_DIM` = 384 | High-res grid for initial conditions |
+| `SURVEY_AREA_DEG2` | 10 deg² | Euclid Deep Field Fornax footprint (RA 03:31:43.6, Dec −28:05:18.6) |
+| `PHOTOZ_N_SIGMA` | 1 | Box spans ±1σ_z of photo-z scatter → $\Delta z = 0.90$ |
+| `HII_DIM` | **256** | Simulation grid cells per side — *derived*, not hardcoded |
+| `BOX_LEN` | **486.33 Mpc** | Transverse box size — *derived* from the footprint at $z=7$ |
+| `DIM` | `3 × HII_DIM` = **768** | High-res grid for initial conditions |
 | $z_\mathrm{min}$, $z_\mathrm{max}$ | **6.995, 7.005** | Lightcone redshift range — smoke-test slab, see the note below |
 | $z_\mathrm{obs}$ | 7.0 | Reference redshift (midpoint) |
 | `minimum_los_slices` | 100 | Floor on $N_z$, overriding the cell-size-matched value |
@@ -575,13 +597,15 @@ from src.conversions import (
 | `mean_matter_density(omega_m, hubble_constant)` | Comoving mean matter density $\bar\rho_m = \Omega_m \rho_{\mathrm{crit},0}$ [M☉ Mpc⁻³]. Defaults to Planck18 |
 | `cell_mass(cell_size_mpc, omega_m, hubble_constant)` | Mean matter mass enclosed by one cubic comoving cell, $M_\mathrm{cell} = \bar\rho_m L_\mathrm{cell}^3$ [M☉] — the grid mass resolution |
 
-For the production grid (`BOX_LEN = 256` Mpc, `HII_DIM = 128`, `DIM = 384`,
-$\Omega_m = 0.315$, $H_0 = 67.36$):
+For the production grid (`BOX_LEN = 486.33` Mpc, `HII_DIM = 256`, `DIM = 768`,
+$\Omega_m = 0.315$, $H_0 = 67.36$) — sized from the survey footprint by
+`survey_area_to_box_size`, which derives `HII_DIM` from a 2.0 Mpc target cell
+so growing the box does not coarsen the mass resolution:
 
 | Grid | Cell size | Mass resolution |
 |------|-----------|-----------------|
-| `DIM` (initial conditions / density field) | 0.667 Mpc | $1.18\times10^{10}\ M_\odot$ per cell |
-| `HII_DIM` (ionisation, 21 cm brightness) | 2.00 Mpc | $3.17\times10^{11}\ M_\odot$ per cell |
+| `DIM` (initial conditions / density field) | 0.633 Mpc | $1.01\times10^{10}\ M_\odot$ per cell |
+| `HII_DIM` (ionisation, 21 cm brightness) | 1.90 Mpc | $2.72\times10^{11}\ M_\odot$ per cell |
 | Halo catalogue (`SAMPLER_MIN_MASS`) | — | $1\times10^{8}\ M_\odot$ (smallest sampled halo) |
 
 > The halo catalogue is *not* limited by the grid mass resolution: 21cmFAST's
@@ -599,6 +623,7 @@ $\Omega_m = 0.315$, $H_0 = 67.36$):
 | `survey_area_from_volume(volume_mpc3, z_min, z_max, cosmo=None)` | Comoving volume [Mpc³] → survey area [deg²] |
 | `area_deg2_to_steradians(area_deg2)` | Survey area [deg²] → [sr] |
 | `volume_from_area(area_deg2, z_min, z_max, cosmo=None, n_z=1000)` | Survey area [deg²] → comoving volume [Mpc³] |
+| `survey_area_to_box_size(area_deg2, z_central, delta_z, cosmo=None, target_cell_size_mpc=2.0, hii_dim=None, snap_hii_dim_to_power_of_two=True)` | Survey footprint → `SimulationBox` carrying 21cmFAST's `BOX_LEN` / `HII_DIM` / `DIM` |
 
 All functions accept scalar or array inputs. Volume–area conversions use
 Simpson integration of the differential comoving volume
@@ -606,7 +631,113 @@ $\mathrm{d}V/\mathrm{d}z\,\mathrm{d}\Omega$ (Hogg 1999) and default to the
 Planck18 cosmology; pass a custom `astropy.cosmology` object via `cosmo` to
 override.
 
+**Sizing the simulation box from the survey footprint**
+
+`survey_area_to_box_size` replaces the hardcoded `BOX_LEN = 256` Mpc /
+`HII_DIM = 128` grid with a box traceable to the survey being forecast. It
+returns a `SimulationBox` dataclass whose `.simulation_options` property is the
+`{"HII_DIM", "BOX_LEN", "DIM"}` mapping 21cmFAST's
+`InputParameters.clone(simulation_options=...)` expects.
+
+```python
+from src.conversions import survey_area_to_box_size
+
+box = survey_area_to_box_size(area_deg2=10.0, z_central=7.0, delta_z=0.90)
+inputs = inputs.clone(simulation_options=box.simulation_options)
+```
+
+| Step | Formula | Result (Fornax) |
+|------|---------|-----------------|
+| Transverse extent | $L_\perp = \sqrt{\Omega}\;D_M(z_c)$, small-angle, square footprint | **486.33 Mpc** → `BOX_LEN` |
+| Line-of-sight depth | $L_\parallel = D_C(z_c + \Delta z/2) - D_C(z_c - \Delta z/2)$ | **315.60 Mpc** |
+| Grid | $N = \lceil L_\perp / 2.0\,\mathrm{Mpc} \rceil$, snapped to a power of two | 244 → **256** = `HII_DIM`, `DIM` = 768 |
+
+The LOS depth is deliberately computed by **differencing comoving distances**
+rather than $\mathrm{d}D_C/\mathrm{d}z \times \Delta z$, matching how
+`run_simulation.py` §1 and the notebook already compute `L_los`.
+
+$L_\parallel$ is **not** a 21cmFAST argument — boxes are cubic, and a
+lightcone's LOS extent comes from the redshift range handed to
+`RectilinearLightconer`. Use the returned `z_min` / `z_max` for that. The
+returned `n_los_tiles` = $L_\parallel / L_\perp$ flags when the coeval box
+would have to be tiled along the LOS (0.65 for Fornax, so no tiling).
+
+**Assumptions, for the thesis writeup** (all recorded in the docstring):
+
+- *Survey geometry* — Euclid Deep Field Fornax, 10 deg², centred RA 03:31:43.6,
+  Dec −28:05:18.6. Treated as square, so $L_\perp$ is an equivalent-square side.
+- *Redshift depth* — set by $\sigma_z = 0.45$ **absolute** at $z = 7$, from
+  Euclid's fractional requirement $\sigma_z/(1+z) < 0.05$. The multiple of
+  $\sigma_z$ is a **deliberate choice, passed explicitly**, not a default: the
+  forecast adopts ±1σ ($\Delta z = 0.90$); ±2σ would give $\Delta z = 1.80$,
+  $L_\parallel = 634.9$ Mpc.
+- *Cosmology* — astropy `Planck18`, following the `cosmo=None` convention of the
+  other survey-geometry functions here and the Planck18 distances
+  `run_simulation.py` already uses for lightcone endpoints. Note `src/analysis.py`
+  takes literal $H_0 = 67.36$, $\Omega_m = 0.315$ instead; the two differ by
+  ~0.4 % in $H_0$ and are not interchangeable at that precision.
+- *Resolution* — `HII_DIM` is derived from `target_cell_size_mpc = 2.0`, the
+  resolution of the old 256 Mpc / 128³ grid, so covering the larger footprint
+  does not silently coarsen $M_\mathrm{cell}$. Passing `hii_dim` explicitly
+  overrides this and *does* change the mass resolution.
+
 **Dependencies:** `numpy`, `astropy`, `scipy`
+
+### `src/analysis.py` — galaxy overdensity weighting
+
+$\delta_\mathrm{gal}$ can be built from the Euclid-selected halo catalogue with
+either of two per-halo weights. Both deposit the same halos onto the same grid
+and normalise the same way, so they are drop-in replacements for one another:
+
+| Mode | Formula | Traces |
+|------|---------|--------|
+| `"number"` (default) | $\delta_\mathrm{gal} = N / \langle N \rangle - 1$ | the *abundance* of detectable galaxies |
+| `"luminosity"` | $\delta_{\mathrm{gal},L} = \sum L_\mathrm{UV} / \langle \sum L_\mathrm{UV} \rangle - 1$ | the *UV emissivity*, up-weighting bright halos |
+
+| Function | Description |
+|----------|-------------|
+| `deposit_halo_field(coords, box_len, n_perp, n_los=None, los_extent=None, weights=None)` | Deposit halos onto an `(n_perp, n_perp, n_los)` grid, summing `weights` (unit weights if `None`) |
+| `galaxy_overdensity_from_catalogue(coords, sfr, halo_masses, box_len, n_perp, ..., weighting="number")` | Apply the Euclid $M_\mathrm{UV}$ window, deposit, and normalise → `(delta_gal, EuclidSelection)` |
+| `GALAXY_WEIGHTING_MODES` | `("number", "luminosity")` |
+
+$L_\mathrm{UV}$ comes from `conversions.sfr_to_Luv()`
+($L_\mathrm{UV} = \mathrm{SFR}/\kappa_\mathrm{UV}$, Madau & Dickinson 2014).
+Because that is a constant rescaling, it divides out of the ratio — the
+luminosity-weighted field is identical to an SFR-weighted one, and differs
+from the number-weighted field only through the per-halo spread in SFR.
+
+> **Two grid shapes, deliberately.** `deposit_halo_field` is used at both
+> shapes and they must not be conflated:
+>
+> | Field | Shape | Built from |
+> |---|---|---|
+> | UV luminosity / selected-galaxy maps (notebook §3) | `(HII_DIM, HII_DIM, HII_DIM)` — **cubic** | the *coeval* perturbed halo catalogue, whose coords span `[0, BOX_LEN)` on all three axes |
+> | $\delta_\mathrm{gal}$ for the power spectra (notebook §4) | `(HII_DIM, HII_DIM, N_z)` | the *lightcone* `halo_sfr` field |
+>
+> The cubic maps are diagnostics only. Feeding one to the power-spectrum
+> estimator would be both a shape and a geometry mismatch, since the LOS axis
+> of the lightcone spans $L_\mathrm{los}$ with $N_z$ cells, not `BOX_LEN` with
+> `HII_DIM`. Halos outside `[0, BOX_LEN]` are dropped by the underlying
+> `histogramdd` (and counted in a printed warning), not wrapped periodically.
+
+**Selecting a mode in `run_simulation.py`** — set the `GALAXY_WEIGHTING`
+constant in the Euclid survey-parameter block:
+
+| Value | Source of `delta_gal` |
+|-------|-----------------------|
+| `"lightcone_sfr"` (default) | the lightcone `halo_sfr` field, `sfr_field / mean_sfr - 1` — the original behaviour, and the only mode that evolves along the line of sight |
+| `"number"` | Euclid-selected catalogue, unit weights |
+| `"luminosity"` | Euclid-selected catalogue, $L_\mathrm{UV}$ weights |
+
+The chosen array flows through the identical downstream path (Kaiser RSD →
+HDF5 `galaxy_overdensity` → `compute_all_power_spectra()`), and the mode is
+recorded as the root attribute `galaxy_weighting`.
+
+> **Line-of-sight caveat:** the halo catalogue is *coeval* at `z_obs` and spans
+> `BOX_LEN` along the LOS, whereas the lightcone spans `L_los`. The catalogue
+> modes are binned into an `(HII_DIM, HII_DIM, N_z)` grid so the shape matches
+> downstream, but they carry no redshift evolution along the LOS and their LOS
+> cell size is `BOX_LEN / N_z`.
 
 ### `src/FOV_to_cMpc.py`
 
@@ -751,7 +882,7 @@ least one corresponding test, in `tests/test_<module>.py`. Run the suite with:
 conda run -n 21cmfast pytest tests/ -v
 ```
 
-**Current status: 76 tests, all passing in ~15 s.** No test invokes 21cmFAST —
+**Current status: 142 tests, all passing in ~21 s.** No test invokes 21cmFAST —
 `tests/conftest.py` writes a synthetic `lightcone_data.h5` with the same schema
 (16² × 12 cells, 4 000 halos), so the whole suite runs offline.
 
@@ -761,6 +892,7 @@ conda run -n 21cmfast pytest tests/ -v
 | `test_dataio.py` | HDF5 loading, metadata accessors, halo subsampling, field/catalogue skipping, product-cache round trip and staleness detection |
 | `test_figures.py` | Headless backend, NaN filling, colormap, and that every one of the 10 figure functions renders and writes a non-empty file |
 | `test_pipeline.py` | CLI parsing, each stage's `auto`/`force`/`skip` behaviour (with a stub simulation script), and end-to-end runs checking figures, cache reuse, and the summary JSON |
+| `test_galaxy_weighting.py` | The number- and luminosity-weighted `delta_gal` constructions: weight conservation, non-cubic grids, zero-mean normalisation, both formulas against manual recomputation, $\kappa_\mathrm{UV}$ scale-invariance, and the error paths |
 | `test_conversions.py` | Mass-resolution helpers: $\bar\rho_m$ against astropy, $H_0^2$ and $L^3$ scalings, the production-grid values, and total-box mass conservation |
 
 > `src/FOV_to_cMpc.py` and the magnitude/SFR half of `src/conversions.py` are

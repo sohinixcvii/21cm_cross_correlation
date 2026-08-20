@@ -9,6 +9,7 @@ build a figure and write a non-empty file without touching a display.
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 import matplotlib
 import numpy as np
@@ -249,3 +250,166 @@ def test_plot_bias_diagnostic(tiny_sim: SimulationData, tmp_path) -> None:
 
     bias = analysis.effective_galaxy_bias(selection, z_obs=tiny_sim.z_obs)
     assert_saves(figures.plot_bias_diagnostic(bias, tiny_sim.z_obs), tmp_path, "bias")
+
+
+def test_plot_galaxy_wedge(
+    tiny_sim: SimulationData, spectra, wedge_slopes, tmp_path
+) -> None:
+    """The filled-wedge galaxy panel renders, saves, and shades the wedge."""
+    horizon, fov = wedge_slopes
+    fig = figures.plot_galaxy_wedge(spectra, tiny_sim, horizon, fov)
+    assert_saves(fig, tmp_path, "galaxy_wedge")
+
+    # The excluded region must be drawn as a filled patch, not lines alone —
+    # that is the whole point of this figure over plot_power_spectra's panel.
+    ax = fig.axes[0]
+    assert any(c.get_hatch() for c in ax.collections), "wedge region is not hatched"
+    labels = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert "Wedge (excluded)" in labels
+    assert "Horizon" in labels and "HERA FoV wedge" in labels
+
+
+def test_plot_wedge_real_space(tiny_sim: SimulationData, wedge_slopes, tmp_path) -> None:
+    """The real-space wedge figure renders and actually suppresses structure."""
+    horizon, _ = wedge_slopes
+    fig = figures.plot_wedge_real_space(tiny_sim, horizon)
+    assert_saves(fig, tmp_path, "wedge_real_space")
+
+    original, filtered = (fig.axes[0].images[0], fig.axes[1].images[0])
+
+    # Removing modes can only take power out of the field.
+    assert np.std(filtered.get_array()) < np.std(original.get_array())
+
+    # Both panels must share a colour scale, or the comparison is meaningless.
+    assert original.get_clim() == filtered.get_clim()
+
+    # The excluded percentage belongs in the title.
+    assert "% of modes excluded" in fig._suptitle.get_text()
+
+
+def test_plot_wedge_real_space_buffer_removes_more(
+    tiny_sim: SimulationData, wedge_slopes
+) -> None:
+    """A non-zero wedge buffer excludes at least as much as the bare line."""
+    horizon, _ = wedge_slopes
+
+    def excluded_percent(buffer: float) -> float:
+        fig = figures.plot_wedge_real_space(tiny_sim, horizon, wedge_buffer=buffer)
+        title = fig.axes[1].get_title()
+        return float(title.split("(")[1].split("%")[0])
+
+    assert excluded_percent(0.5) >= excluded_percent(0.0)
+
+
+def _photoz_budget(tiny_sim: SimulationData, spectra):
+    """Uncertainty budget for the synthetic simulation."""
+    return analysis.compute_uncertainty_budget(
+        spectra=spectra,
+        z_obs=tiny_sim.z_obs,
+        photoz_uncertainty=tiny_sim.get("photoz_uncertainty"),
+        wedge_buffer=tiny_sim.get("wedge_buffer"),
+        mean_galaxy_density=tiny_sim.get("mean_galaxy_density"),
+    )
+
+
+def test_plot_photoz_suppression(
+    tiny_sim: SimulationData, spectra, tmp_path
+) -> None:
+    """The photo-z sweep renders, saves, and puts W = 1 at sigma_z = 0."""
+    budget = _photoz_budget(tiny_sim, spectra)
+    fig = figures.plot_photoz_suppression(budget, tiny_sim)
+    assert_saves(fig, tmp_path, "photoz_suppression")
+
+    ax = fig.axes[0]
+    curves = [ln for ln in ax.lines if len(ln.get_xdata()) > 2]
+    assert len(curves) >= 5
+
+    # sigma_z = 0 is the spectroscopic limit: no damping anywhere.
+    assert np.allclose(curves[0].get_ydata(), 1.0)
+
+    # Larger sigma_z damps harder at every k_par, so the curves never cross.
+    for lower, higher in zip(curves, curves[1:]):
+        assert np.all(higher.get_ydata() <= lower.get_ydata() + 1e-12)
+
+
+def test_plot_photoz_suppression_always_includes_adopted(
+    tiny_sim: SimulationData, spectra
+) -> None:
+    """The adopted sigma_z is drawn even when the caller omits it."""
+    budget = _photoz_budget(tiny_sim, spectra)
+    fig = figures.plot_photoz_suppression(
+        budget, tiny_sim, sigma_z_scenarios=(0.0, 0.01),
+    )
+    labels = " ".join(t.get_text() for t in fig.axes[0].get_legend().get_texts())
+    assert "adopted" in labels
+    assert f"{budget.photoz_uncertainty:g}" in labels
+
+
+def test_photoz_suppression_sigma_r_matches_analysis(
+    tiny_sim: SimulationData, spectra
+) -> None:
+    """The scaled sigma_r reproduces radial_smearing_length for every scenario."""
+    budget = _photoz_budget(tiny_sim, spectra)
+    scale = budget.radial_smearing / budget.photoz_uncertainty
+
+    for sigma_z in (0.02, 0.1, 0.45):
+        assert np.isclose(
+            sigma_z * scale,
+            analysis.radial_smearing_length(sigma_z, tiny_sim.z_obs),
+        )
+
+
+def test_plot_uv_selection_maps(tiny_sim: SimulationData, tmp_path) -> None:
+    """The UV/selection maps render, save, and mark both magnitude cuts."""
+    fig = figures.plot_uv_selection_maps(tiny_sim, M_UV_bright=-22.0)
+    assert_saves(fig, tmp_path, "uv_selection_maps")
+
+    # Two projected maps plus the magnitude histogram.
+    assert len(fig.axes[0].images) == 1 and len(fig.axes[1].images) == 1
+
+    cut_positions = sorted(
+        line.get_xdata()[0] for line in fig.axes[2].lines
+    )
+    assert cut_positions == [-22.0, float(tiny_sim.get("M_UV_limit", -18.0))]
+
+
+def test_plot_uv_selection_maps_matches_analysis_selection(
+    tiny_sim: SimulationData
+) -> None:
+    """The map's selected count equals src.analysis's own selection."""
+    selection = analysis.select_euclid_halos(
+        tiny_sim.sfr, tiny_sim.halo_masses,
+        M_UV_faint=tiny_sim.get("M_UV_limit", -18.0), M_UV_bright=-22.0,
+    )
+    fig = figures.plot_uv_selection_maps(tiny_sim, M_UV_bright=-22.0)
+
+    # The counts map is built from the same mask, so it must sum to n_selected.
+    counts = fig.axes[1].images[0].get_array()
+    assert int(np.nansum(counts)) == selection.n_selected
+    assert f"{selection.n_selected:,}" in fig._suptitle.get_text()
+
+
+def test_plot_uv_selection_maps_handles_zero_sfr_halos(
+    tiny_sim: SimulationData, tmp_path
+) -> None:
+    """
+    Halos with SFR <= 0 must not break the selection indexing.
+
+    ``select_euclid_halos`` returns a mask over the *valid* (SFR > 0) subset,
+    not the full catalogue.  Indexing ``halo_coords`` with it directly is a
+    length mismatch as soon as any halo has SFR <= 0.
+    """
+    sfr = np.asarray(tiny_sim.sfr, dtype=float).copy()
+    sfr[::3] = 0.0                      # knock out a third of the catalogue
+    zeroed = replace(tiny_sim, sfr=sfr)
+
+    selection = analysis.select_euclid_halos(
+        sfr, zeroed.halo_masses,
+        M_UV_faint=zeroed.get("M_UV_limit", -18.0), M_UV_bright=-22.0,
+    )
+    assert selection.n_valid < sfr.size   # the guard is actually exercised
+
+    fig = figures.plot_uv_selection_maps(zeroed, M_UV_bright=-22.0)
+    counts = fig.axes[1].images[0].get_array()
+    assert int(np.nansum(counts)) == selection.n_selected
+    assert_saves(fig, tmp_path, "uv_selection_maps_zero_sfr")

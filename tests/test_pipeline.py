@@ -187,13 +187,14 @@ def test_cached_run_reuses_products(workspace) -> None:
 
 
 def test_plot_selection_limits_output(workspace) -> None:
-    """``--plots power snr`` writes only the two k-space figures."""
+    """``--plots power snr`` writes only the k-space figures and their companions."""
     assert run_pipeline.main(
         base_args(workspace, "--analysis", "force", "--plots", "power", "snr")
     ) == 0
 
     assert sorted(os.listdir(workspace["figdir"])) == [
-        "cross_snr.png", "power_spectra_2d.png",
+        "cross_snr.png", "galaxy_wedge.png", "power_spectra_2d.png",
+        "wedge_real_space.png",
     ]
 
 
@@ -293,12 +294,14 @@ def test_budget_is_cached_alongside_the_spectra(workspace) -> None:
 
 
 def test_budget_figure_is_written(workspace) -> None:
-    """``--plots budget`` renders only the uncertainty-budget figure."""
+    """``--plots budget`` renders the budget figure and the photo-z sweep."""
     assert run_pipeline.main(
         base_args(workspace, "--analysis", "force", "--plots", "budget")
     ) == 0
 
-    assert sorted(os.listdir(workspace["figdir"])) == ["uncertainty_budget.png"]
+    assert sorted(os.listdir(workspace["figdir"])) == [
+        "photoz_suppression.png", "uncertainty_budget.png",
+    ]
 
 
 def test_missing_data_file_returns_error_code(tmp_path) -> None:
@@ -317,4 +320,6 @@ def test_pdf_output_format(workspace) -> None:
         base_args(workspace, "--analysis", "force", "--plots", "power",
                   "--format", "pdf")
     ) == 0
-    assert os.listdir(workspace["figdir"]) == ["power_spectra_2d.pdf"]
+    assert sorted(os.listdir(workspace["figdir"])) == [
+        "galaxy_wedge.pdf", "power_spectra_2d.pdf", "wedge_real_space.pdf",
+    ]

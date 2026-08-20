@@ -7,6 +7,514 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Footprint-driven simulation box size, 2026-08-19 ───────────────── -->
+
+### Added
+
+- **`survey_area_to_box_size()` in `src/conversions.py`** — converts a survey
+  footprint (area in deg², central redshift, redshift depth) into a 21cmFAST
+  box geometry, so `BOX_LEN` is traceable to the survey being forecast instead
+  of chosen by hand.
+
+  ```python
+  survey_area_to_box_size(area_deg2, z_central, delta_z, cosmo=None,
+                          target_cell_size_mpc=2.0, hii_dim=None,
+                          snap_hii_dim_to_power_of_two=True)
+  ```
+
+  | Step | Formula | Fornax result |
+  |---|---|---|
+  | Transverse extent | $L_\perp = \sqrt{\Omega}\,D_M(z_c)$ (small-angle, square footprint) | 486.33 Mpc |
+  | LOS depth | $L_\parallel = D_C(z_c + \Delta z/2) - D_C(z_c - \Delta z/2)$ | 315.60 Mpc |
+  | Grid | $\lceil L_\perp / 2.0\,\mathrm{Mpc}\rceil$, snapped to a power of two | 244 → 256 |
+
+  The LOS depth uses **distance differencing**, not
+  $\mathrm{d}D_C/\mathrm{d}z \times \Delta z$, matching how
+  `run_simulation.py` §1 and the notebook already compute `L_los`. The
+  transverse step reuses the same construction as
+  `src/FOV_to_cMpc.py:transverse_comoving_size_from_area`, and `cosmo=None`
+  defaults to astropy `Planck18`, following the convention already used by
+  `volume_from_area` and `survey_area_from_volume`.
+
+- **`SimulationBox` dataclass**, returned by the above. Carries `box_len`,
+  `hii_dim`, `dim`, `cell_size`, `los_depth`, `z_min`, `z_max`,
+  `transverse_area`, `solid_angle_sr`, and `n_los_tiles`. Its
+  `.simulation_options` property is the `{"HII_DIM", "BOX_LEN", "DIM"}` mapping
+  `p21c.InputParameters.clone()` expects, so callers never restate it.
+
+  `los_depth` is reported but is **not** a 21cmFAST argument — boxes are cubic
+  and a lightcone's LOS extent comes from the redshift range passed to
+  `RectilinearLightconer`; `z_min` / `z_max` are provided for that.
+  `n_los_tiles` = $L_\parallel / L_\perp$ flags when the coeval box would be
+  tiled along the LOS (0.65 for Fornax — no tiling).
+
+- **11 tests in `tests/test_conversions.py`** covering the transverse and LOS
+  formulae against independent astropy calculations, the power-of-two snap,
+  mass-resolution preservation, the `simulation_options` mapping, $\sqrt{A}$
+  scaling, and seven rejected non-physical inputs.
+
+### Changed
+
+- **`BOX_LEN` / `HII_DIM` / `DIM` are no longer hardcoded** in either
+  `run_simulation.py` or `21cmfast_HERAxEuclid_lightcone.ipynb`. Both now derive
+  the grid from a new survey-footprint configuration block:
+
+  | Parameter | Before | After |
+  |---|---|---|
+  | `BOX_LEN` | 256.0 Mpc (hand-picked) | **486.33 Mpc** (10 deg² Fornax at $z=7$) |
+  | `HII_DIM` | 128 | **256** |
+  | `DIM` | 384 | **768** |
+  | `HII_DIM` cell size | 2.00 Mpc | 1.90 Mpc |
+  | $M_\mathrm{cell}$ (`HII_DIM`) | $3.17\times10^{11}\ M_\odot$ | $2.72\times10^{11}\ M_\odot$ |
+
+  **Grid resolution is preserved, not changed.** `HII_DIM` is derived from
+  `target_cell_size_mpc = 2.0` — the resolution of the old 256 Mpc / 128³ grid
+  — rather than pinned, so covering the larger footprint does not coarsen
+  $M_\mathrm{cell}$. 486.33 / 2.0 = 244 cells, snapped up to 256 for the FFTs.
+  This is a **~8× increase in volume and compute** over the previous grid; see
+  `TODO.md` for the storage/compute implications.
+
+- **New configuration block** in both entry points, ahead of the grid:
+  `SURVEY_AREA_DEG2 = 10.0` (Euclid Deep Field Fornax, RA 03:31:43.6,
+  Dec −28:05:18.6), `SURVEY_Z_CENTRAL = 7.0`, and `PHOTOZ_N_SIGMA = 1`.
+  `photoz_uncertainty` (σ_z = 0.45, absolute) **moved into this block** from the
+  Euclid-parameters section below it, because it now also sets the LOS depth;
+  a pointer comment marks its old location. Its value is unchanged.
+
+  The photo-z multiple is an **explicit choice, not a silent default**:
+  `PHOTOZ_N_SIGMA = 1` gives $\Delta z = 0.90$ ($z = 6.55$–$7.45$,
+  $L_\parallel = 315.6$ Mpc); `= 2` would give $\Delta z = 1.80$
+  ($z = 6.10$–$7.90$, $L_\parallel = 634.9$ Mpc).
+
+- **Notebook lightcone range** is now derived: `z_min` / `z_max` come from
+  `SIM_BOX`, giving 6.55–7.45 in place of the hardcoded 6.5–7.5.
+
+- **`run_simulation.py` keeps its smoke-test slab** ($z = 6.995$–$7.005$). The
+  survey-derived range is exposed as `SURVEY_Z_MIN` / `SURVEY_Z_MAX` and
+  reported in the summary as overridden, but is deliberately *not* adopted —
+  the existing DO-NOT-WIDEN warning tying it to `TODO.md` P0.1/P0.2 (the
+  power-spectrum estimator's LOS-homogeneity assumption) still stands. Only the
+  transverse box geometry is footprint-driven there for now.
+
+- **HDF5 provenance attributes** added by `run_simulation.py`:
+  `survey_area_deg2`, `survey_z_central`, `survey_delta_z`, `photoz_n_sigma`,
+  `survey_z_min`, `survey_z_max`, `survey_los_depth`, and `survey_field`, so a
+  stored run records the footprint its box was sized from.
+
+- **`src/conversions.py` imports tidied** — a duplicated `import numpy as np`
+  removed; `dataclasses` and `typing` imports added.
+
+<!-- ─── Notebook UV-map deposit, 2026-08-20 ───────────────────────────── -->
+
+### Changed
+
+- **The notebook's UV-map cells now use `analysis.deposit_halo_field`** instead
+  of hand-rolling the deposit. §3 of
+  `21cmfast_HERAxEuclid_lightcone.ipynb` (cells "Convert halo SFRs to UV
+  luminosities" and "Apply Euclid-like UV magnitude selection") previously
+  computed `floor(coords / cell_size) % HII_DIM` and filled the grid with
+  `np.add.at`, duplicating the helper `src/analysis.py` already provides. The
+  binning is now shared with `run_pipeline.py`'s galaxy field, per the
+  notebook's own "every formula is imported from `src/`" rule.
+
+  Verified **bit-identical** to the previous path for in-box coordinates. One
+  deliberate behavioural change: halos outside `[0, BOX_LEN]` are now *dropped*
+  by `histogramdd` rather than periodically wrapped by the modulo, so the cell
+  prints a warning counting them instead of silently relocating them.
+
+- **Three write-only full-box allocations removed** from the same cells:
+  `luminosity_density_grid`, `selected_luminosity_density_grid`, and
+  `selected_galaxy_overdensity` were each computed and never read. At
+  `HII_DIM = 256` those are ~134 MB apiece (~400 MB total). Each is replaced by
+  a scalar diagnostic print plus a comment giving the one-line form, so the
+  quantities remain documented without being materialised.
+
+- **The cubic grid shape is now explained rather than left ambiguous.** These
+  maps are built from the *coeval* perturbed halo catalogue
+  (`perturb_halo_catalog` on the coeval ICs), so their coordinates span
+  `[0, BOX_LEN)` on all three axes and a `(HII_DIM, HII_DIM, HII_DIM)` grid is
+  correct — it is **not** the `(HII_DIM, HII_DIM, N_z)` lightcone shape used
+  for the power spectra in §4. A comment now says so, and the note in §3
+  records why `selected_galaxy_overdensity` must not be fed to the spectra:
+  `delta_gal` there comes from the lightcone `halo_sfr` field, and mixing the
+  two would be a shape and geometry mismatch.
+
+### Added
+
+- **4 tests in `tests/test_galaxy_weighting.py`** pinning the switch: equality
+  with a reference floor/mod implementation for both weighted and unweighted
+  deposits, the drop-versus-wrap difference for out-of-box halos, and that the
+  cubic coeval grid and the `n_los` lightcone grid stay distinguishable.
+
+<!-- ─── Luminosity-weighted galaxy overdensity, 2026-08-19 ─────────────── -->
+
+### Added
+
+- **`delta_gal` can now be luminosity-weighted instead of number-weighted.**
+  `src/analysis.py` gains two functions and one constant:
+
+  | New API | Purpose |
+  |---|---|
+  | `deposit_halo_field(coords, box_len, n_perp, n_los, los_extent, weights)` | 3D `histogramdd` deposit of a halo catalogue onto the simulation grid, with optional per-halo weights |
+  | `galaxy_overdensity_from_catalogue(..., weighting=...)` | Euclid-selected `delta_gal` in either mode; returns `(field, EuclidSelection)` |
+  | `GALAXY_WEIGHTING_MODES` | `("number", "luminosity")` |
+
+  The two modes differ only in the per-halo weight, and are normalised
+  identically:
+
+  | Mode | Formula |
+  |---|---|
+  | `"number"` (default) | $\delta_\mathrm{gal} = N / \langle N \rangle - 1$ |
+  | `"luminosity"` | $\delta_{\mathrm{gal},L} = \sum L_\mathrm{UV} / \langle \sum L_\mathrm{UV} \rangle - 1$ |
+
+  `L_UV` comes from the existing `conversions.sfr_to_Luv()`
+  ($L_\mathrm{UV} = \mathrm{SFR} / \kappa_\mathrm{UV}$, $\kappa_\mathrm{UV}
+  = 1.15\times10^{-28}$, Madau & Dickinson 2014) — consumed, not
+  reimplemented. Both modes return the same shape and the same zero mean, so
+  they are interchangeable with no downstream change.
+
+- **`GALAXY_WEIGHTING` flag in `run_simulation.py`** (§3b), with three values:
+
+  | Value | Source of `delta_gal` |
+  |---|---|
+  | `"lightcone_sfr"` (default) | the lightcone `halo_sfr` field — **existing behaviour, unchanged** |
+  | `"number"` | Euclid-selected catalogue, unit weights |
+  | `"luminosity"` | Euclid-selected catalogue, `L_UV` weights |
+
+  The selected array flows into the identical downstream path — Kaiser RSD,
+  HDF5 `galaxy_overdensity`, and `compute_all_power_spectra()`. The mode is
+  recorded as the root attribute `galaxy_weighting`.
+
+- **`tests/test_galaxy_weighting.py`** — 17 tests covering weight
+  conservation, non-cubic grids, the zero-mean normalisation, both formulas
+  against manual recomputation, scale-invariance of the `kappa_UV` factor,
+  that the two modes genuinely differ, and the error paths (bad shapes,
+  unknown mode, empty selection).
+
+### Changed
+
+- **`figures.plot_uv_selection_maps()` now calls `deposit_halo_field()`**
+  instead of its own `np.histogram2d` pair. The projected maps are the LOS
+  sum of the same 3D deposit that builds `delta_gal`, so figure and field bin
+  identical positions.
+
+- **`M_UV_bright` / `M_UV_faint` moved up** in `run_simulation.py` to the
+  Euclid survey-parameter block, since §3b now selects on them as well as §4.
+  Values are unchanged (`-22`, `M_UV_limit`).
+
+### Fixed
+
+- **`plot_uv_selection_maps()` indexed the full catalogue with a mask sized to
+  the valid subset.** `selection.mask` from `select_euclid_halos()` is defined
+  over halos with `SFR > 0` and `M > 0`, not over the whole catalogue, so
+  `coords[selection.mask]` and `magnitude[selection.mask]` raised
+  `IndexError` — or silently mis-aligned — as soon as any halo had
+  `SFR <= 0`. The mask is now lifted back to full-catalogue indices.
+
+### Notes
+
+- The pre-existing default `delta_gal` was **never** $N/\bar N - 1$: it is the
+  lightcone `halo_sfr` density, `sfr_field / mean_sfr - 1`. Since
+  $L_\mathrm{UV} \propto \mathrm{SFR}$, that field is *already*
+  luminosity-weighted up to the constant $\kappa_\mathrm{UV}$, which divides
+  out of the ratio. The number-vs-luminosity distinction therefore only
+  exists on the catalogue path.
+- The catalogue is **coeval** at `z_obs` and spans `BOX_LEN` along the LOS,
+  while the lightcone spans `L_los`. The catalogue modes are deposited into
+  an `(HII_DIM, HII_DIM, N_z)` grid for shape compatibility, but they carry
+  no redshift evolution along the LOS, and their LOS cell size is
+  `BOX_LEN / N_z`. See the open `L_los` discrepancy in `TODO.md`.
+
+<!-- ─── Notebook/pipeline figure parity, 2026-08-18 ────────────────────── -->
+
+### Added
+
+- **The HPC pipeline gained the four figures that existed only in
+  `21cmfast_HERAxEuclid_lightcone.ipynb`.** `src/figures.py` goes from 11 to
+  15 figures, all wired into `run_pipeline.py`'s existing plot groups:
+
+  | New figure | Group | Notebook origin |
+  |---|---|---|
+  | `photoz_suppression` | `budget` | §7b — `W(k_par)` swept over σ_z |
+  | `galaxy_wedge` | `power` | §7c — `P_gal` with the wedge filled, not outlined |
+  | `wedge_real_space` | `power` | §7d — wedge excision applied to the 3D field |
+  | `uv_selection_maps` | `scaling` | §3 — projected UV luminosity and Euclid-selected counts |
+
+- **Each reuses `src/analysis.py` rather than restating it.**
+  `plot_galaxy_wedge` reuses `_add_wedge_lines` / `_style_k_axes`;
+  `plot_wedge_real_space` reuses `foreground_wedge_mask`, reshaped onto the 3D
+  FFT grid (the wedge condition factorises, so the flattened transverse plane
+  gives a mask that reshapes straight back); `plot_uv_selection_maps` reuses
+  `select_euclid_halos`, so the map and the bias stage select the same halos;
+  `plot_photoz_suppression` reuses `photoz_damping_kernel` and obtains each
+  scenario's σ_r by scaling the budget's own `radial_smearing` — exact, since
+  σ_r = c σ_z / H(z) is linear in σ_z, and it cannot drift from the adopted
+  value.
+
+- `figure_stage()` now takes an explicit `m_uv_bright` argument, threaded from
+  `--m-uv-bright` at the call site, so the selection-map figure cuts where the
+  bias stage cuts.
+
+### Fixed
+
+- **Three pipeline tests asserted the exact per-group figure inventory** and so
+  failed the moment a group gained a figure — which is the behaviour those
+  assertions are for. `test_plot_selection_limits_output`,
+  `test_budget_figure_is_written` and `test_pdf_output_format` now list the new
+  expected sets (the last also needed `sorted()`, having compared an unordered
+  `os.listdir` against a one-element list).
+
+### Verified
+
+- **Six new tests in `tests/test_figures.py`**, going past "it renders":
+  the wedge region is a hatched patch and not just lines; the real-space
+  filtered panel has strictly lower variance than the original and shares its
+  colour limits; a non-zero wedge buffer excludes at least as much as the bare
+  line; the σ_z = 0 photo-z curve is flat at W = 1 and the family never
+  crosses; the adopted σ_z is drawn even when a caller omits it; the scaled
+  σ_r reproduces `radial_smearing_length` exactly; and the selection map's
+  counts sum to `select_euclid_halos`'s own `n_selected`.
+- Suite **99 → 107 passing**.
+- **Full end-to-end run against the real 2.7 GB `outputs/lightcone_data.h5`**
+  (`--plots all`, into a scratch figure directory so the committed outputs were
+  left alone): all **15 figures written**, no errors. The selection maps
+  recover 49,315 of 114,291,212 halos with visible cosmic web in both panels.
+
+### Parity gaps found but deliberately not closed
+
+- **The bright-end magnitude cut differs.** The notebook uses
+  `M_UV_bright = -22.66` ("obtained from collaborators"); `run_simulation.py`
+  line 492 hardcodes `-22` and `--m-uv-bright` defaults to `-22.0`. The
+  *capability* is at parity — the flag exists — but the default is not, and
+  changing it moves the pipeline's selection, b_g and n_gal. Left as a science
+  decision; `--m-uv-bright -22.66` reproduces the notebook today.
+- **`sfr_mini` / `fesc_sfr` panels** (notebook §3, Plots 4–5) have no pipeline
+  equivalent. Both fields are `None` under the `"simple"` template, so the
+  panels never render in practice; building pipeline versions would add code
+  that no current configuration exercises.
+- **Not a code gap, but worth knowing:** the cached
+  `outputs/lightcone_data.h5` is a *thin slab* — z = 6.995–7.005, 100 LOS
+  cells spanning ~3.2 Mpc — where the notebook runs z = 6.5–7.5 over 350.8 Mpc
+  with 175 cells. `wedge_real_space` is correct on it but uninformative, since
+  the box holds almost no line-of-sight structure to remove. Re-running the
+  simulation over the notebook's redshift range would make that figure say
+  something.
+
+<!-- ─── Real-space wedge figure §7d, 2026-08-18 ────────────────────────── -->
+
+### Added
+
+- **§7d of `21cmfast_HERAxEuclid_lightcone.ipynb`: the foreground wedge shown in
+  real space.** §7c draws the wedge as a boundary in $(k_\perp, k_\parallel)$;
+  §7d applies it — FFT the 3D galaxy overdensity, zero every mode with
+  $k_\parallel \le m_{\rm horizon}k_\perp$, inverse-FFT, and show the same LOS
+  slice before and after on a shared colour scale.
+
+- **Nothing is recomputed.** The field is `galaxy_overdensity` **post-Kaiser**
+  (§4 rebinds it), i.e. exactly what §6 fed to `compute_all_power_spectra`, so
+  the panel really is `P_galaxy_auto`'s underlying field. The wavenumber grids
+  are §4's `KX/KY/KZ`, the slope is §7's `horizon_slope`, and the slice index
+  and extent are §5's `mid_y` / `extent_los` with §5's orientation convention
+  (`field[:, mid_y, :]`, no `.T`, `origin="lower"` → LOS on x).
+
+- **The mask is `src.analysis.foreground_wedge_mask`, not a hand-rolled
+  comparison.** The wedge condition factorises — $k_\perp$ varies over the
+  transverse plane only, $k_\parallel$ over the LOS axis only — so the
+  $(N^2, N_z)$ mask the function returns for the flattened transverse plane
+  reshapes straight onto the $(N, N, N_z)$ grid. Verified identical to the
+  direct comparison `|KZ| > hypot(KX, KY) * horizon_slope`.
+
+- **`buffer=0.0` is passed deliberately**, giving the bare horizon line
+  $k_\parallel \le m k_\perp$ that §7c draws. §8's excision adds `wedge_buffer`
+  on top, so the budget discards slightly *more* than this figure shows.
+
+### Verified
+
+- Executed at the **fiducial grid geometry** — $(128, 128, 175)$, 2.0 Mpc
+  cells, $L_{\rm LOS} = 350.8$ Mpc, read off the run's own §1 output — in 0.2 s.
+- **97.4 % of the 3D modes fall inside the bare horizon wedge**
+  (2,791,938 of 2,867,200). This number is purely geometric — it depends only
+  on the $k$-grid and the slope, not on the field — so it is the figure's real
+  value, not an artefact of the stand-in field used to exercise the cell.
+- The filtered field is real-valued to $10^{-8}$ after the round trip, and its
+  variance is strictly reduced. **The retained-variance figure printed by the
+  cell is field-dependent** and was only exercised against a power-law mock, so
+  no value for it is quoted here; the real one appears when the notebook is run.
+- A first draft of the §7d prose had the physics backwards — it claimed the
+  filtered field "keeps its transverse texture but loses coherence along the
+  LOS". Rendering the figure showed the opposite: the cut keeps
+  $k_\parallel > 3.15\,k_\perp$, so what survives varies *rapidly along the LOS*
+  and is smooth transversally, which is why the filtered panel is striped across
+  the LOS axis. The markdown was corrected before the cell was finalised.
+
+### Confirmed from the user's own run
+
+The notebook on disk now carries execution outputs through `In[28]`, which
+covers §7b and §7c added earlier today. Both **ran clean on real data**, no
+errors. Notably $1/\sigma_r = 0.0064$ Mpc⁻¹ does sit below the real lowest
+sampled $k_\parallel = 0.0102$ Mpc⁻¹, so §7b's axis extension does engage as
+designed; $W$ at that first bin is **0.274**, less severe than the coarser
+stand-in grid had suggested. `galaxy_bias = 5.394` in the live namespace,
+matching the value documented in the README fix above.
+
+<!-- ─── Optional halo-catalogue fields TypeError, 2026-08-18 ───────────── -->
+
+### Fixed
+
+- **`21cmfast_HERAxEuclid_lightcone.ipynb` §3's halo-catalogue plotting cell
+  crashed on `np.isfinite(sfr_mini)`** with
+
+  ```
+  TypeError: ufunc 'isfinite' not supported for the input types, and the inputs
+  could not be safely coerced to any supported types according to the casting
+  rule ''safe''
+  ```
+
+  whenever the run had no mini-halos — which is *every* run under the `"simple"`
+  template, i.e. the notebook's default. Plot 4 was unreachable.
+
+  **Cause.** py21cmfast v4 declares optional catalogue fields as
+  `_arrayfield(optional=True)` → `attrs.field(default=None)`
+  (`py21cmfast/wrapper/outputs.py:888`). The attribute therefore **always
+  exists** and is `None` when unpopulated, so the `hasattr(perturbed_halos,
+  "sfr_mini")` guard was unconditionally True. `get_21cmfast_array` then
+  returned `np.asarray(None)` — a 0-d array of dtype **object**, which is *not*
+  `None` and so passed the `sfr_mini is not None` check, but which every ufunc
+  rejects. Three steps, each individually reasonable, composing into a crash.
+
+  **Fix**, both in the cell that owns the helper:
+
+  | Change | Effect |
+  |---|---|
+  | `get_21cmfast_array` returns `None` for a `None` input | no more 0-d object arrays; the `is not None` guards downstream become meaningful |
+  | guards use `getattr(perturbed_halos, ..., None)` and test the **value** | `hasattr` was testing the wrong thing for an attrs field |
+
+  `fesc_sfr` (Plot 5) carried the identical latent bug and is fixed by the same
+  two changes.
+
+- **Minihalo SFR was left in the wrong unit.** Plot 4 histograms `sfr_mini` on
+  the *same axes* as `sfr`, but only `sfr` got the M_sun s⁻¹ → M_sun yr⁻¹
+  correction documented in `docs/Low_SFR_fix.md`. Once the TypeError was fixed
+  and Plot 4 could actually run, the two distributions would have sat **7.5 dex
+  apart on an axis labelled M_sun/yr**. `sfr_mini` now takes the same
+  `* _SEC_PER_YR` conversion.
+
+  `fesc_sfr` is very likely in the same internal unit, but it is plotted on its
+  own axes with no unit in the label, so it was **left as returned** rather than
+  converted on an assumption — flagged in a comment at the point of use.
+
+### Verified
+
+- The cell **executed both ways** against a stand-in catalogue: with
+  `sfr_mini = None` (the reported failure — now runs clean, Plots 4–5 skipped,
+  3 figures) and with `sfr_mini` populated (Plot 4 runs, 4 figures).
+- Units confirmed consistent after the fix: median `sfr_mini` = 9.3×10⁻⁴ vs
+  median `sfr` = 1.0×10⁻¹ M_sun yr⁻¹ — the ~2 dex minihalo offset that is
+  physically expected, not the 7.5 dex unit artefact.
+- The failure mode itself was reproduced directly:
+  `np.asarray(None)` → `dtype=object`, `ndim=0`, `is not None` → True,
+  and `np.isfinite` on it raises the reported error verbatim.
+- Suite still **99 passing**; notebook valid under `nbformat` (37 cells).
+- A new print reports which optional fields were populated, so the next run
+  says *why* Plots 4–5 are absent instead of silently omitting them.
+
+<!-- ─── Notebook diagnostic figures §7b/§7c, 2026-08-18 ─────────────────── -->
+
+### Added
+
+- **Two diagnostic figures in `21cmfast_HERAxEuclid_lightcone.ipynb`**, between
+  §7 (the 2D spectra) and §8 (the uncertainty budget). Both are pure additions:
+  the notebook diff is **194 inserted lines, 0 deleted**, and no pre-existing
+  cell was touched or reformatted.
+
+  | § | Figure | What it shows |
+  |---|--------|---------------|
+  | **7b** | Photo-$z$ suppression | $W(k_\parallel) = e^{-k_\parallel^2\sigma_r^2/2}$ for $\sigma_z \in \{0,\,0.02,\,0.05,\,0.10,\,0.30,\,0.45\}$ on log-$k_\parallel$ axes, each labelled with its $\sigma_r$, the adopted Euclid Wide case emphasised, $1/\sigma_r$ marked |
+  | **7c** | $P_\mathrm{gal}$ vs. the wedge | $\log_{10}\lvert P_\mathrm{gal}\rvert$ with the wedge region **filled and hatched**, not merely outlined, plus the horizon (solid) and HERA FoV (dashed) boundaries |
+
+- **Neither cell reimplements anything.** §7b imports
+  `radial_smearing_length` and `photoz_damping_kernel` from `src.analysis` —
+  the same two functions `compute_uncertainty_budget()` applies in step ① —
+  and passes `**COSMOLOGY`, so the figure cannot drift from the damping
+  actually adopted. §7c reuses §7's `fill_nan_nearest`, `k_perp`, `k_parallel`,
+  `P_galaxy_auto`, `horizon_slope`, `fov_wedge_slope_value` and the
+  `k_perp_line` / `k_par_horizon` / `k_par_fov` lines built from them. The only
+  new code in either cell is the figure itself.
+
+### Two judgement calls worth recording
+
+- **§7b's x-axis is extended below `k_parallel[0]` when — and only when —
+  $1/\sigma_r$ falls outside the sampled range.** At the adopted
+  $\sigma_z = 0.45$, $\sigma_r = 157.5$ Mpc gives $1/\sigma_r = 0.0064$
+  Mpc⁻¹, while the box's lowest $k_\parallel$ bin sits at $\approx 0.018$
+  Mpc⁻¹. Held strictly to `k_parallel`'s range the requested marker renders
+  off-canvas, so the axis extends to $0.7/\sigma_r$ and the unsampled strip is
+  shaded with its own legend entry. **This is the physical content of the
+  figure, not a cosmetic fix**: every mode the lightcone measures already lies
+  past the damping scale, and $W = 0.018$ at the very first bin. `x_lo` is the
+  single line to change to pin the axis back to `k_parallel`.
+- **§7c's wedge overlay is dark (35 % black + white hatching), not light.** A
+  white overlay was tried first: on `plasma` it *brightens* the already-bright
+  low-$k$ corner and the legend swatch disappears against the colourbar's
+  yellow end. The dark overlay dims the excluded modes so the accessible
+  upper-left window reads as the signal region at a glance.
+
+### Verified
+
+- Both cells **executed standalone against the real `src/` functions** in the
+  `21cmfast` env and their output figures inspected.
+- §7b reproduces the documented smearing lengths exactly:
+  $\sigma_z = 0.45 \Rightarrow \sigma_r = 157.5$ Mpc, matching
+  `docs/uncertainty_budget.md` §4.2 and the notebook's own §8 prose; the
+  $\sigma_z = 0$ curve is flat at $W = 1$, as it must be.
+- One bug caught and fixed during that check: the per-scenario print reported
+  $W$ at the *extended plotting floor* rather than at the lowest sampled bin
+  (0.783 instead of 0.0184 for $\sigma_z = 0.45$). It now evaluates
+  `photoz_damping_kernel(k_parallel[:1], sigma_r)` explicitly.
+- §7c exercised with a NaN bin present, confirming `fill_nan_nearest` is
+  reached; horizon and FoV slopes 3.151 and 0.379 at $z = 7$.
+- Suite still **99 passing**; notebook valid under `nbformat` (37 cells); all
+  code cells parse; all cell ids unique.
+
+### Fixed
+
+- **`README.md`'s notebook-3 fiducial table still listed $\sigma_z = 0.059$**,
+  directly contradicting the configuration cell (0.45 since the
+  absolute-vs-fractional correction) and the new §7b figure built on it. Now
+  0.45, with the absolute-vs-fractional distinction spelled out inline. The
+  identical row in the **archived** coeval notebook's table was deliberately
+  left at 0.059 — that notebook was run with 0.059 and the table is a record of
+  what was run, so it gained only a clarifying note.
+- **`README.md`'s §-structure list for notebook 3** gained §7b and §7c, and its
+  §8 entry — still described as "photo-$z$ damping and foreground wedge
+  excision" — now matches the notebook's actual header, the single
+  `compute_uncertainty_budget()` call.
+- **`README.md` still advertised a fixed $b_\mathrm{gal} = 8$ for notebook 3.**
+  That fallback no longer exists — `galaxy_bias = 8` is **commented out** in the
+  configuration cell. The row now states that the bias is computed in-line and
+  says where: **§3**, the analytic-galaxy-bias cell, at
+  `galaxy_bias = galaxy_bias_hmf` — a Simpson integral of the Sheth-Tormen halo
+  bias weighted by the HMF over the Euclid-selected mass bins,
+
+  $$b_g = \frac{\int b_h(M)\,\frac{dn}{d\log M}\,d\log M}{\int \frac{dn}{d\log M}\,d\log M} \approx 5.39,$$
+
+  consumed downstream by §4's $\beta = f/b$, and requiring `hmf`. The quoted
+  5.39 is the value from the verified clean-namespace run recorded in the
+  2026-08-17 entry above, not a fresh execution — reproducing it needs the full
+  upstream lightcone and halo catalogue.
+
+  The $b_\mathrm{gal} = 8$ rows for the **archived coeval notebook** and the
+  **HPC pipeline** were left alone: the first records what that notebook was run
+  with, and the second already documents itself correctly as a fallback
+  overwritten by the halo-catalogue estimate.
+
+### Not covered by a new test
+
+`tests/` is unchanged. Both additions are notebook plotting cells that define
+no new function — every formula they draw is already covered by
+`tests/test_uncertainty_budget.py`. There is no notebook-execution test in the
+suite for either of them to hook into.
+
 <!-- ─── Notebook galaxy-bias cell debugged, 2026-08-17 ──────────────────── -->
 
 ### Fixed
