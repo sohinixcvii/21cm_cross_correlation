@@ -7,6 +7,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── README streamlined + quickstart, 2026-08-20 ────────────────────── -->
+
+### Added
+
+- **`docs/reference.md`** — the long-form companion to the README, holding the
+  detail that used to sit inline there: per-notebook structure, equations and
+  fiducial parameters; the figure-by-figure literature references; the
+  21cmFASTv4 `HaloBox` / lightcone API notes and source-model templates; the
+  `src/` function reference; the requirements table; the test-suite coverage
+  table; the `%matplotlib widget` notes; and the full bibliography. Content is
+  carried over unchanged apart from the corrections noted below.
+
+- **A `## Quickstart` section in `README.md`**, covering *all* options of both
+  front ends:
+
+  | Subsection | Contents |
+  |---|---|
+  | Install | `env.yml`, the pinned freeze, and the HPC pointer |
+  | Run the HPC pipeline | stage control, the seven `--plots` groups and the figures each writes, paths/rendering options, the four uncertainty-budget overrides, `submit_job.sh`'s environment variables, and `run_simulation.py`'s configuration constants |
+  | Run the notebooks | which notebook needs a simulation, what to edit in each, and the full ★ CONFIGURATION cell of `21cmfast_HERAxEuclid_lightcone.ipynb` |
+  | Outputs | the four output paths and the runtime note |
+
+  `run_simulation.py` has **no CLI** — it is a configuration-constant script, so
+  its parameters are documented as a constants table rather than as flags.
+
+### Changed
+
+- **`README.md` cut from 929 to ~310 lines.** The overview is now a three-row
+  table (pipeline / notebooks / `src/`), and the reference material moved to
+  `docs/reference.md`. The documentation index gained a row for the new doc.
+
+### Fixed
+
+- **`--plots` was documented without the `budget` group.** The README listed
+  `{all,none,fields,halos,scaling,power,snr,bias}`; the actual choices are
+  `{all,none,fields,halos,scaling,power,snr,budget,bias}`, with `budget`
+  writing `uncertainty_budget` and `photoz_suppression`. The four
+  uncertainty-budget overrides (`--sigma-z`, `--wedge-buffer`,
+  `--integration-time`, `--bandwidth`), `--sim-script` and `--m-uv-bright` were
+  undocumented entirely.
+
+- **Notebook 3's magnitude window and redshift range.** The README recorded
+  only "$M_\mathrm{UV}$ limit $< -18$"; the notebook's configuration cell sets
+  `M_UV_faint = -18.0` **and** `M_UV_bright = -22.66`, which differs from
+  `run_simulation.py`'s $-22$. The prose also still said the lightcone spans a
+  "default $z = 6.5$–$7.5$", whereas the range has been derived from the survey
+  footprint as $6.55$–$7.45$ since the footprint-driven box change.
+
+- **The `TODO.md` index row** referred to "the Δz = 1.0 range now requires";
+  the committed range is the Δz = 0.01 smoke-test slab, so the row now reads
+  "a wider Δz would require".
+
 <!-- ─── Footprint-driven simulation box size, 2026-08-19 ───────────────── -->
 
 ### Added
