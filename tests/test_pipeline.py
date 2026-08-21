@@ -12,6 +12,7 @@ import json
 import os
 import sys
 
+import numpy as np
 import pytest
 
 import run_pipeline
@@ -402,3 +403,65 @@ def test_simulation_subprocess_runs_unbuffered(workspace, monkeypatch) -> None:
 
     assert captured["command"][1] == "-u"
     assert captured["command"][2] == "run_simulation.py"
+
+
+def test_summary_is_valid_json_with_provenance_attrs(workspace) -> None:
+    """
+    Numpy scalars from the HDF5 must not break the summary.
+
+    ``h5py`` returns ``np.int64`` / ``np.bool_`` for the ``random_seed`` and
+    ``n_threads`` attributes that ``run_simulation.py`` now writes.
+    ``json.dump`` cannot serialise those and fails *partway through*, leaving
+    a truncated file that only reveals itself when something parses it.  The
+    original ``source_run`` change slipped past because the test fixture's
+    HDF5 predates those attributes.
+    """
+    import h5py
+
+    with h5py.File(workspace["data"], "a") as f:
+        f.attrs["run_id"] = "20260821_120000"
+        f.attrs["run_manifest"] = "/tmp/sim_20260821_120000.json"
+        f.attrs["random_seed"] = np.int64(42)
+        f.attrs["n_threads"] = np.int64(8)
+
+    assert run_pipeline.main(base_args(workspace, "--plots", "none")) == 0
+
+    with open(workspace["summary"]) as f:
+        summary = json.load(f)          # would raise on a truncated write
+
+    assert summary["source_run"]["random_seed"] == 42
+    assert isinstance(summary["source_run"]["n_threads"], int)
+    assert summary["source_run"]["run_id"] == "20260821_120000"
+
+
+def test_noise_model_and_mode_weighting_reach_the_summary(workspace) -> None:
+    """Both new flags are recorded, so a stored result says how it was made."""
+    assert run_pipeline.main(base_args(
+        workspace, "--plots", "none", "--noise-model", "physical",
+        "--mode-weighted",
+    )) == 0
+
+    with open(workspace["summary"]) as f:
+        budget = json.load(f)["uncertainty_budget"]
+
+    assert budget["noise_model"] == "physical"
+    assert budget["mode_weighted"] is True
+    # k_perp-resolved noise is summarised by its finite range.
+    assert budget["P_noise_21cm"] < budget["P_noise_21cm_max"]
+
+
+def test_defaults_are_unchanged_by_the_new_options(workspace) -> None:
+    """
+    The default run must still be the historical one.
+
+    Every stored figure, summary and note in this repo predates the physical
+    noise model and the mode weighting; if the defaults moved, all of them
+    would be silently wrong.
+    """
+    assert run_pipeline.main(base_args(workspace, "--plots", "none")) == 0
+    with open(workspace["summary"]) as f:
+        budget = json.load(f)["uncertainty_budget"]
+
+    assert budget["noise_model"] == "scaling"
+    assert budget["mode_weighted"] is False
+    assert budget["P_noise_21cm"] == pytest.approx(3.749, rel=1e-3)

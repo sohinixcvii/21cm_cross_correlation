@@ -69,6 +69,16 @@ __all__ = [
     "T_SKY_300MHZ_K",
     "SKY_SPECTRAL_INDEX",
     "NOISE_NORMALISATION_MPC3",
+    "HERA_ANTENNA_SPACING_M",
+    "HERA_HEX_N_SIDE",
+    "HERA_OMEGA_P_OVER_PP",
+    "HERA_APERTURE_EFFICIENCY",
+    "N_POLARISATIONS",
+    "NOISE_EQUIVALENT_BANDWIDTH",
+    "cosmological_scalar_x2y",
+    "hera_beam_solid_angles",
+    "hera_baseline_counts",
+    "hera_thermal_noise_power_physical",
     "euclid_sfr_window",
     "select_euclid_halos",
     "effective_galaxy_bias",
@@ -589,10 +599,14 @@ class SNRResult:
         Quadrature sum over the bins outside the wedge [σ].
     sigma_cross : ndarray
         Per-mode cross-power uncertainty.
-    P_noise_21cm : float
-        21 cm thermal noise power [mK^2 Mpc^3].
+    P_noise_21cm : float or ndarray
+        21 cm thermal noise power [mK^2 Mpc^3].  An array when the
+        ``k_perp``-resolved instrument model was used.
     P_noise_galaxy : float
         Galaxy shot noise power [Mpc^3].
+    mode_weight : ndarray or None
+        ``sqrt(N_patch dN)`` applied per bin (La Plante Eq. 19), or ``None``
+        when the unweighted per-bin ratio was returned.
     sigma_21cm : ndarray
         ``|P_21| + P_N,21`` — the 21 cm side of the La Plante Eq. 15 product.
     sigma_galaxy : ndarray
@@ -607,8 +621,9 @@ class SNRResult:
     snr_outside_wedge: np.ndarray
     total_snr: float
     sigma_cross: np.ndarray
-    P_noise_21cm: float
+    P_noise_21cm: float | np.ndarray
     P_noise_galaxy: float
+    mode_weight: Optional[np.ndarray] = None
     sigma_21cm: Optional[np.ndarray] = None
     sigma_galaxy: Optional[np.ndarray] = None
     cosmic_variance_term: Optional[np.ndarray] = None
@@ -619,16 +634,391 @@ class SNRResult:
 # T_sys = T_rcvr + T_sky(ν), with the synchrotron sky scaled from 300 MHz.
 # These are the values the notebook inlines in its noise cell; naming them
 # keeps the pipeline and the notebook auditable against each other.
-T_RECEIVER_K = 100.0        # HERA receiver temperature [K]
-T_SKY_300MHZ_K = 60.0       # Galactic synchrotron sky at 300 MHz [K]
-SKY_SPECTRAL_INDEX = 2.55   # T_sky ∝ ν^-2.55
+# This is the 21cmSense convention, not DeBoer et al. (2017) Table 2 - the two
+# differ, and the difference matters. 21cmSense's calc_sense.py computes
+#     Tsky = 60e3 * (3e8 / freq_Hz) ** 2.55        [mK]
+# i.e. 60 K x (lambda/1 m)^2.55, identical to the form below because
+# 300 MHz / nu = lambda / 1 m. DeBoer et al. (2017) Table 2 instead give
+# T_sys = 100 + 120 (nu/150 MHz)^-2.55 K, whose sky term is 120 K at 150 MHz
+# against this model's 60 x 2^2.55 = 352 K - a factor 2.9 colder. The
+# 21cmSense values are kept: they are what the notebook inlined, and they are
+# the more conservative (hotter) choice. See NUMBERS_AND_SOURCES.md section 3.
+T_RECEIVER_K = 100.0        # HERA receiver temperature [K] - 21cmSense `Trx`
+T_SKY_300MHZ_K = 60.0       # Galactic synchrotron sky at 300 MHz [K] - 21cmSense
+SKY_SPECTRAL_INDEX = 2.55   # T_sky ∝ ν^-2.55 - Pober et al. (2013, 2014)
 
 # The notebook's noise expression is T_sys² × 1e3 / (t_int Δν).  T_sys² / (t Δν)
 # is dimensionless × mK², so this factor carries the [Mpc^3] that makes P_N
 # commensurate with the measured P_21 — i.e. it stands in for the survey
 # volume per mode that a full instrument model (X²YΩ'/n(k_perp)) would supply.
 # It is a normalisation of the scaling estimate, not a physical constant.
+# See `hera_thermal_noise_power_physical` for the instrument model it stands in
+# for, and NUMBERS_AND_SOURCES.md §3 for the ~10^4 discrepancy between them.
 NOISE_NORMALISATION_MPC3 = 1e3
+
+# ── HERA instrument model (for the physical noise path) ────────────────────
+# Values traceable to the references named on each line.  See
+# NUMBERS_AND_SOURCES.md §3 for the full audit.
+
+#: Antenna-to-antenna spacing of the hexagonal core [m].
+#: DeBoer et al. (2017), PASP 129, 045001 — "14.6 m center-to-center spacing".
+HERA_ANTENNA_SPACING_M = 14.6
+
+#: Antennas per side of the close-packed hexagonal core.  11 per side gives
+#: 3n² − 3n + 1 = 331 elements, the closest hex number to HERA's 320-element
+#: split core (350 total = 320 core + 30 outriggers; DeBoer et al. 2017).
+#: The outriggers contribute negligibly to the power-spectrum sensitivity and
+#: are not modelled.
+HERA_HEX_N_SIDE = 11
+
+#: Ratio Ω_P / Ω_PP of the beam and squared-beam solid angles, median over the
+#: CST-simulated HERA beam models across 100–200 MHz.
+#: Parsons (2017), "Power Spectrum Normalizations for HERA", HERA memo —
+#: prints "HERA Omega_P/OMEGA_PP 2.1752891255".  (PAPER's is 2.35.)
+HERA_OMEGA_P_OVER_PP = 2.175
+
+#: Aperture efficiency of a HERA dish.  Calibrated so that the textbook
+#: relation Ω_P = λ²/A_e with A_e = η_ap π D²/4 reproduces the Ω_P ≈ 0.04 sr
+#: at 150 MHz plotted in Parsons (2017) for D = 14 m: A_e = λ²/Ω_P = 100 m²
+#: against a geometric area of 154 m².
+HERA_APERTURE_EFFICIENCY = 0.65
+
+#: Orthogonal polarisations combined to measure the unpolarised signal.
+#: Parsons (2017) Eq. 12 — "the factor of N_pol in the denominator explicitly
+#: counts the two orthogonal polarizations".
+N_POLARISATIONS = 2
+
+#: Noise-equivalent bandwidth of the line-of-sight taper.  Exactly 1 for no
+#: taper, which is what `compute_cylindrical_cross_power` applies.
+#: Parsons (2017) Eq. 12, ``WINDOW = 'none'``.
+NOISE_EQUIVALENT_BANDWIDTH = 1.0
+
+
+def cosmological_scalar_x2y(
+    z_obs: float,
+    f_21_hz: float = 1420.405e6,
+    hubble_constant: float = 67.36,
+    omega_m: float = 0.315,
+    speed_of_light_kms: float = 3e5,
+) -> float:
+    """
+    The ``X²Y`` scalar converting (sr, Hz) to comoving volume.
+
+    ``X = D_c(z)`` maps angle to transverse comoving distance and
+    ``Y = c (1+z)² / [H(z) f_21]`` maps frequency to line-of-sight comoving
+    distance, so ``X²Y`` carries a visibility-space power spectrum into
+    Mpc³.
+
+    Parameters
+    ----------
+    z_obs : float
+        Reference redshift.
+    f_21_hz : float, optional
+        21 cm rest frequency [Hz].
+    hubble_constant, omega_m, speed_of_light_kms : float, optional
+        Background cosmology.
+
+    Returns
+    -------
+    float
+        ``X²Y`` [Mpc³ sr⁻¹ Hz⁻¹].  ≈ 1227 at z = 7 for Planck 2018.
+
+    References
+    ----------
+    Parsons et al. (2012a), ApJ 756, 165 — Eq. 12 and the surrounding
+    definitions of ``X`` and ``Y``.
+    Parsons (2017), "Power Spectrum Normalizations for HERA" — Eq. 1, where
+    ``X²Y`` is "a cosmological scalar with units of h⁻³ Mpc³ / (sr·Hz)".
+    """
+    distance = comoving_distance(
+        z_obs, hubble_constant, omega_m, speed_of_light_kms
+    )
+    hubble_z = hubble_parameter(z_obs, hubble_constant, omega_m)
+    y_factor = speed_of_light_kms * (1.0 + z_obs) ** 2 / (hubble_z * f_21_hz)
+    return float(distance ** 2 * y_factor)
+
+
+def hera_beam_solid_angles(
+    z_obs: float,
+    dish_diameter: float = 14.0,
+    aperture_efficiency: float = HERA_APERTURE_EFFICIENCY,
+    omega_p_over_pp: float = HERA_OMEGA_P_OVER_PP,
+    f_21_hz: float = 1420.405e6,
+    speed_of_light_mps: float = 3e8,
+) -> Tuple[float, float]:
+    """
+    HERA primary-beam solid angle and the effective beam area for power spectra.
+
+    ``Ω_P = λ²/A_e`` with ``A_e = η_ap π D²/4`` is the standard antenna
+    relation.  The quantity a power-spectrum normalisation needs is not
+    ``Ω_P`` but ``Ω_eff ≡ Ω_P²/Ω_PP``, where ``Ω_PP`` is the solid angle of
+    the *squared* beam — using ``Ω_P`` alone is a known error in
+    power-spectrum normalisation.
+
+    Parameters
+    ----------
+    z_obs : float
+        Reference redshift, which sets the observed wavelength.
+    dish_diameter : float, optional
+        Dish diameter [m].  Default: HERA, 14 m (DeBoer et al. 2017).
+    aperture_efficiency : float, optional
+        η_ap.  See :data:`HERA_APERTURE_EFFICIENCY`.
+    omega_p_over_pp : float, optional
+        Ω_P/Ω_PP.  See :data:`HERA_OMEGA_P_OVER_PP`.
+    f_21_hz : float, optional
+        21 cm rest frequency [Hz].
+    speed_of_light_mps : float, optional
+        Speed of light [m s⁻¹].
+
+    Returns
+    -------
+    omega_p : float
+        Primary-beam solid angle [sr].  ≈ 0.04 at 150 MHz for a 14 m dish.
+    omega_eff : float
+        ``Ω_P²/Ω_PP`` [sr], the factor entering the noise power.
+
+    References
+    ----------
+    Parsons et al. (2014), ApJ 788, 106 — Appendix B, the definition of
+    ``Ω_eff = Ω_P²/Ω_PP`` and why the squared beam is the relevant one.
+    Parsons (2017), "Power Spectrum Normalizations for HERA" — Eqs. 2, 3, 7;
+    HERA ``Ω_P/Ω_PP = 2.175``, and ``Ω_P ≈ 0.04`` sr at 150 MHz.
+    Thompson, Moran & Swenson (2017), *Interferometry and Synthesis in Radio
+    Astronomy*, 3rd ed. — the ``Ω_P A_e = λ²`` antenna theorem.
+    """
+    wavelength = speed_of_light_mps * (1.0 + z_obs) / f_21_hz      # [m]
+    effective_area = aperture_efficiency * np.pi * dish_diameter ** 2 / 4.0
+    omega_p = wavelength ** 2 / effective_area
+    return float(omega_p), float(omega_p * omega_p_over_pp)
+
+
+def hera_baseline_counts(
+    k_perp: np.ndarray,
+    z_obs: float,
+    antenna_spacing: float = HERA_ANTENNA_SPACING_M,
+    hex_n_side: int = HERA_HEX_N_SIDE,
+    dish_diameter: float = 14.0,
+    f_21_hz: float = 1420.405e6,
+    speed_of_light_mps: float = 3e8,
+    hubble_constant: float = 67.36,
+    omega_m: float = 0.315,
+    speed_of_light_kms: float = 3e5,
+) -> np.ndarray:
+    """
+    Number of HERA baselines sampling each ``k_perp`` bin.
+
+    Builds the close-packed hexagonal core, forms every antenna pair, converts
+    each baseline length to ``u = |b|/λ`` and then to
+    ``k_perp = 2π u / D_c(z)``, and counts how many fall in each bin.  This is
+    what makes the physical noise model ``k_perp``-dependent: short baselines
+    are hugely redundant on a hex array, so low ``k_perp`` is sampled far more
+    deeply than high ``k_perp``.
+
+    Parameters
+    ----------
+    k_perp : ndarray
+        Bin centres [Mpc⁻¹].  Bin edges are taken as the geometric midpoints.
+    z_obs : float
+        Reference redshift.
+    antenna_spacing : float, optional
+        Core spacing [m].  See :data:`HERA_ANTENNA_SPACING_M`.
+    hex_n_side : int, optional
+        Antennas per hexagon side.  See :data:`HERA_HEX_N_SIDE`.
+    dish_diameter : float, optional
+        Dish diameter [m]; sets the ``uv``-cell size ``D/λ``.
+    f_21_hz, speed_of_light_mps : float, optional
+        21 cm rest frequency [Hz] and speed of light [m s⁻¹].
+    hubble_constant, omega_m, speed_of_light_kms : float, optional
+        Background cosmology, for ``D_c(z)``.
+
+    Returns
+    -------
+    ndarray
+        Mean baselines **per independent uv-cell** in each bin, shape
+        ``(len(k_perp),)``.  Zero where the array has no baselines — those
+        modes are unmeasurable, and the noise model returns ``inf``.
+
+    References
+    ----------
+    DeBoer et al. (2017), PASP 129, 045001 — 350 elements, 14 m dishes,
+    14.6 m hexagonal-core spacing.
+    Parsons et al. (2012a), ApJ 756, 165 — gridding baselines into
+    ``uv``-cells of the antenna footprint ``D/λ``.
+
+    Notes
+    -----
+    Counting *per uv-cell* rather than per ``k_perp`` bin is the point.  Only
+    baselines landing in the same ``uv``-cell — within one antenna footprint
+    ``D/λ`` — sample the same Fourier mode and integrate down coherently.
+    Baselines elsewhere in the bin measure *different* modes; they add to the
+    mode count, not to the depth of any one mode, and are accounted for by the
+    ``mode_counts`` weighting in :func:`cross_power_snr` instead.  Summing all
+    baselines in a bin would count the same redundancy twice, and on the
+    fiducial grid would under-predict the noise several-fold.
+    """
+    # ── Hexagonal close-packed layout ─────────────────────────────────────
+    positions = []
+    for row in range(-hex_n_side + 1, hex_n_side):
+        n_in_row = 2 * hex_n_side - 1 - abs(row)
+        x_offset = -(n_in_row - 1) / 2.0
+        for column in range(n_in_row):
+            positions.append((
+                (x_offset + column) * antenna_spacing,
+                row * antenna_spacing * np.sqrt(3.0) / 2.0,
+            ))
+    antennas = np.asarray(positions)
+
+    # ── Every antenna pair, as a uv vector ────────────────────────────────
+    wavelength = speed_of_light_mps * (1.0 + z_obs) / f_21_hz
+    delta = antennas[:, None, :] - antennas[None, :, :]
+    upper = np.triu_indices(antennas.shape[0], k=1)
+    u_coord = delta[..., 0][upper] / wavelength
+    v_coord = delta[..., 1][upper] / wavelength
+
+    # ── Grid into uv-cells one antenna footprint (D/λ) across ─────────────
+    cell = dish_diameter / wavelength
+    cell_index = np.stack(
+        (np.round(u_coord / cell), np.round(v_coord / cell)), axis=1
+    ).astype(np.int64)
+    _, inverse, per_cell = np.unique(
+        cell_index, axis=0, return_inverse=True, return_counts=True
+    )
+    # Representative |u| of each cell: the first baseline assigned to it.
+    order = np.argsort(inverse, kind="stable")
+    starts = np.concatenate(([0], np.cumsum(per_cell)[:-1]))
+    cell_u = np.abs(np.hypot(u_coord, v_coord))[order][starts]
+
+    # ── |u| -> k_perp, then average the per-cell counts in each bin ───────
+    distance = comoving_distance(
+        z_obs, hubble_constant, omega_m, speed_of_light_kms
+    )
+    k_perp_of_cell = 2.0 * np.pi * cell_u / distance
+
+    centres = np.asarray(k_perp, dtype=float)
+    inner = np.sqrt(centres[:-1] * centres[1:])
+    edges = np.concatenate((
+        [centres[0] ** 2 / inner[0]] if inner.size else [centres[0] * 0.5],
+        inner,
+        [centres[-1] ** 2 / inner[-1]] if inner.size else [centres[-1] * 2.0],
+    ))
+    which = np.digitize(k_perp_of_cell, edges) - 1
+    valid = (which >= 0) & (which < centres.size)
+
+    totals = np.bincount(which[valid], weights=per_cell[valid],
+                         minlength=centres.size)
+    occupied = np.bincount(which[valid], minlength=centres.size)
+    return np.divide(
+        totals, occupied, out=np.zeros_like(totals), where=occupied > 0
+    )
+
+
+def hera_thermal_noise_power_physical(
+    k_perp: np.ndarray,
+    z_obs: float,
+    integration_time: float,
+    dish_diameter: float = 14.0,
+    f_21_hz: float = 1420.405e6,
+    speed_of_light_mps: float = 3e8,
+    hubble_constant: float = 67.36,
+    omega_m: float = 0.315,
+    speed_of_light_kms: float = 3e5,
+    n_polarisations: int = N_POLARISATIONS,
+    noise_equivalent_bandwidth: float = NOISE_EQUIVALENT_BANDWIDTH,
+    **kwargs: float,
+) -> np.ndarray:
+    """
+    HERA thermal-noise power spectrum, resolved in ``k_perp``.
+
+    Implements
+
+    ``P_N(k_perp) = X²Y · Ω_eff · NEB · T_sys² / [N_pol · t_int · N_bl(k_perp)]``
+
+    which is Parsons (2017) Eq. 12 with the per-mode integration time written
+    as ``t_int × N_bl(u)`` for a redundant array, and is algebraically
+    identical to La Plante et al. (2023) Eq. 11,
+    ``T_sys² Ω_P² X² Y / [Ω_PP t_int N_pol N_bl(u)]``, since
+    ``Ω_eff ≡ Ω_P²/Ω_PP``.
+
+    Unlike :func:`hera_thermal_noise_power` this is **not** flat in
+    ``k_perp``: the hexagonal core is highly redundant on short baselines, so
+    the noise rises steeply where few baselines sample the mode.
+
+    Parameters
+    ----------
+    k_perp : ndarray
+        Bin centres [Mpc⁻¹].
+    z_obs : float
+        Reference redshift.
+    integration_time : float
+        Total integration time [s].
+    dish_diameter : float, optional
+        Dish diameter [m].
+    f_21_hz, speed_of_light_mps : float, optional
+        21 cm rest frequency [Hz], speed of light [m s⁻¹].
+    hubble_constant, omega_m, speed_of_light_kms : float, optional
+        Background cosmology.
+    n_polarisations : int, optional
+        Orthogonal polarisations combined.
+    noise_equivalent_bandwidth : float, optional
+        NEB of the line-of-sight taper; 1 for no taper.
+    **kwargs
+        Forwarded to :func:`hera_beam_solid_angles` and
+        :func:`hera_baseline_counts` (``aperture_efficiency``,
+        ``omega_p_over_pp``, ``antenna_spacing``, ``hex_n_side``).
+
+    Returns
+    -------
+    ndarray
+        ``P_N`` per ``k_perp`` bin [mK² Mpc³], shape ``(len(k_perp), 1)`` so it
+        broadcasts against a ``(n_perp, n_par)`` spectrum.  ``inf`` where no
+        baseline samples the bin.
+
+    References
+    ----------
+    Parsons (2017), "Power Spectrum Normalizations for HERA" — Eq. 12.
+    La Plante et al. (2023), arXiv:2205.09770 — Eq. 11.
+    Parsons et al. (2014), ApJ 788, 106 — Appendix B, ``Ω_eff``.
+
+    Notes
+    -----
+    Still an idealisation: it assumes every baseline integrates for the full
+    ``integration_time`` on the same field, ignores the ``uv``-plane rotation
+    that fills in coverage, and takes a single reference redshift.  For a
+    publication forecast use `21cmSense
+    <https://github.com/rasg-affiliates/21cmSense>`_.
+    """
+    cosmology = dict(
+        hubble_constant=hubble_constant,
+        omega_m=omega_m,
+        speed_of_light_kms=speed_of_light_kms,
+    )
+    beam_kwargs = {
+        key: kwargs[key] for key in ("aperture_efficiency", "omega_p_over_pp")
+        if key in kwargs
+    }
+    array_kwargs = {
+        key: kwargs[key] for key in ("antenna_spacing", "hex_n_side")
+        if key in kwargs
+    }
+
+    _, omega_eff = hera_beam_solid_angles(
+        z_obs, dish_diameter=dish_diameter, f_21_hz=f_21_hz,
+        speed_of_light_mps=speed_of_light_mps, **beam_kwargs,
+    )
+    x2y = cosmological_scalar_x2y(z_obs, f_21_hz=f_21_hz, **cosmology)
+    t_sys_mK, _ = system_temperature(z_obs, f_21_hz)
+    n_baselines = hera_baseline_counts(
+        k_perp, z_obs, dish_diameter=dish_diameter, f_21_hz=f_21_hz,
+        speed_of_light_mps=speed_of_light_mps, **cosmology, **array_kwargs,
+    )
+
+    numerator = (
+        x2y * omega_eff * noise_equivalent_bandwidth * t_sys_mK ** 2
+    )
+    denominator = n_polarisations * integration_time * n_baselines
+    with np.errstate(divide="ignore"):
+        power = np.where(n_baselines > 0, numerator / denominator, np.inf)
+    return power[:, np.newaxis]
 
 
 def system_temperature(
@@ -655,6 +1045,16 @@ def system_temperature(
         System temperature [mK].
     observed_frequency : float
         Redshifted 21 cm frequency [Hz].
+
+    References
+    ----------
+    Pober et al. (2013), AJ 145, 65; Pober et al. (2014), ApJ 782, 66 - the
+    ``T_sky = 60 K (lambda/1 m)^2.55`` sky model with ``T_rcvr = 100 K``, as
+    implemented in `21cmSense <https://github.com/jpober/21cmSense>`_
+    (``calc_sense.py``: ``Tsky = 60e3 * (3e8/freq)**2.55``, in mK).
+    DeBoer et al. (2017), PASP 129, 045001 - Table 2 gives a different
+    normalisation, ``T_sys = 100 + 120(nu/150 MHz)^-2.55`` K; see the module
+    constants for why this one is kept.
     """
     observed_frequency = f_21_hz / (1.0 + z_obs)
     t_sys_kelvin = T_RECEIVER_K + T_SKY_300MHZ_K * (
@@ -714,9 +1114,11 @@ def cross_power_snr(
     P_cross_observed: np.ndarray,
     P_21cm_auto: np.ndarray,
     P_galaxy_observed: np.ndarray,
-    P_noise_21cm: float,
+    P_noise_21cm: float | np.ndarray,
     P_noise_galaxy: float,
     outside_wedge: Optional[np.ndarray] = None,
+    mode_counts: Optional[np.ndarray] = None,
+    n_patch: int = 1,
 ) -> SNRResult:
     """
     Per-mode cross-correlation SNR and its cumulative significance.
@@ -732,12 +1134,23 @@ def cross_power_snr(
         21 cm auto-power, same shape.
     P_galaxy_observed : ndarray
         Photo-z damped galaxy auto-power, same shape.
-    P_noise_21cm : float
-        21 cm thermal noise power.
+    P_noise_21cm : float or ndarray
+        21 cm thermal noise power.  A scalar (the flat estimate from
+        :func:`hera_thermal_noise_power`) or an array broadcastable against
+        the spectra — e.g. the ``(n_perp, 1)`` output of
+        :func:`hera_thermal_noise_power_physical`.
     P_noise_galaxy : float
         Galaxy shot noise power (``1 / n̄``).
     outside_wedge : ndarray of bool, optional
         Mask of usable modes.  When omitted, all modes are used.
+    mode_counts : ndarray, optional
+        Fourier modes averaged into each bin, from
+        :class:`~src.dataio.PowerSpectra`.  When given, the per-bin SNR is
+        weighted by ``sqrt(n_patch × mode_counts / 2)`` — La Plante Eq. 19.
+        When omitted (the default) the unweighted per-bin ratio is returned,
+        which is what every result produced before this option existed used.
+    n_patch : int, optional
+        Independent survey patches, ``N_patch`` in Eq. 19.
 
     Returns
     -------
@@ -751,6 +1164,15 @@ def cross_power_snr(
     ``|P_× / T_0| / σ_×``.  Those factors **cancel exactly** in the ratio, so
     the form used here — which omits ``T_0`` throughout, as the source
     notebook does — gives an identical SNR.
+
+    **Mode weighting.**  Eq. 15 gives the variance of a *single* mode; Eq. 19
+    combines bins as ``ŝ = sqrt(N_patch dN) P_×/σ_×`` with ``dN`` the
+    independent-mode count of Eq. 18.  ``dN`` is ``mode_counts / 2``: the FFT
+    of a real field is Hermitian, so half its cells are redundant.  Checked
+    numerically against Eq. 18 on the fiducial grid, the two agree to a
+    median 4.7 %.  Leaving ``mode_counts`` unset omits the weighting and
+    under-reports the total SNR by roughly an order of magnitude — see
+    ``docs/uncertainty_budget.md`` §6.5.
     """
     sigma_21cm = np.abs(P_21cm_auto) + P_noise_21cm
     sigma_galaxy = np.abs(P_galaxy_observed) + P_noise_galaxy
@@ -761,18 +1183,31 @@ def cross_power_snr(
 
     snr_per_mode = np.abs(P_cross_observed) / sigma_cross
 
+    # La Plante Eq. 19: s_hat = sqrt(N_patch dN) P_x / sigma_x, dN = Eq. 18.
+    mode_weight = None
+    if mode_counts is not None:
+        mode_weight = np.sqrt(
+            n_patch * np.asarray(mode_counts, dtype=float) / 2.0
+        )
+        snr_per_mode = snr_per_mode * mode_weight
+
     if outside_wedge is None:
         outside_wedge = np.ones_like(snr_per_mode, dtype=bool)
 
     snr_outside_wedge = np.where(outside_wedge, snr_per_mode, np.nan)
+
+    noise_21cm = np.asarray(P_noise_21cm, dtype=float)
 
     return SNRResult(
         snr_per_mode=snr_per_mode,
         snr_outside_wedge=snr_outside_wedge,
         total_snr=total_snr(snr_per_mode, outside_wedge),
         sigma_cross=sigma_cross,
-        P_noise_21cm=float(P_noise_21cm),
+        P_noise_21cm=(
+            float(noise_21cm) if noise_21cm.ndim == 0 else noise_21cm
+        ),
         P_noise_galaxy=float(P_noise_galaxy),
+        mode_weight=mode_weight,
         sigma_21cm=sigma_21cm,
         sigma_galaxy=sigma_galaxy,
         cosmic_variance_term=cosmic_variance_term,
@@ -845,14 +1280,21 @@ class UncertaintyBudget:
         Instrument configuration [s], [Hz].
     mean_galaxy_density : float
         n̄ used for the shot noise.
+    noise_model : str
+        Which thermal-noise model produced ``snr.P_noise_21cm`` —
+        ``'scaling'`` or ``'physical'``.
+    mode_weighted : bool
+        Whether the La Plante Eq. 19 mode weighting was applied.
     snr : SNRResult
         Per-mode maps, variance terms, and the total significance.
 
     Notes
     -----
-    The per-bin ``mode_counts`` are **not** divided into the variance: the
-    quoted SNR is a per-bin quantity summed in quadrature, exactly as the
-    notebook computes it.  A mode-weighted total would be larger.
+    With ``mode_weighted=False`` (the default) the per-bin ``mode_counts`` are
+    **not** folded into the total: the quoted SNR is a per-bin quantity summed
+    in quadrature, exactly as the notebook computes it, and is roughly an
+    order of magnitude smaller than the Eq. 19 weighted total.  See
+    ``docs/uncertainty_budget.md`` §6.5.
     """
 
     k_perp: np.ndarray
@@ -875,8 +1317,10 @@ class UncertaintyBudget:
     integration_time: float
     bandwidth: float
     mean_galaxy_density: float
+    noise_model: str = "scaling"
+    mode_weighted: bool = False
 
-    snr: SNRResult
+    snr: SNRResult = None            # type: ignore[assignment]
 
     # ── Derived summaries ─────────────────────────────────────────────────
     @property
@@ -938,7 +1382,24 @@ class UncertaintyBudget:
             "integration_time_s": float(self.integration_time),
             "bandwidth_Hz": float(self.bandwidth),
             "mean_galaxy_density": float(self.mean_galaxy_density),
-            "P_noise_21cm": self.snr.P_noise_21cm,
+            "noise_model": self.noise_model,
+            "mode_weighted": bool(self.mode_weighted),
+            # k_perp-resolved under noise_model="physical"; reduced to its
+            # finite range so the summary stays scalar and JSON-serialisable.
+            "P_noise_21cm": (
+                float(self.snr.P_noise_21cm)
+                if np.ndim(self.snr.P_noise_21cm) == 0
+                else float(np.min(self.snr.P_noise_21cm))
+            ),
+            "P_noise_21cm_max": (
+                float(self.snr.P_noise_21cm)
+                if np.ndim(self.snr.P_noise_21cm) == 0
+                else float(np.max(
+                    np.asarray(self.snr.P_noise_21cm)[
+                        np.isfinite(self.snr.P_noise_21cm)
+                    ]
+                ))
+            ),
             "P_noise_galaxy": self.snr.P_noise_galaxy,
             "cosmic_variance_fraction": self.cosmic_variance_fraction,
             "total_snr_sigma": self.snr.total_snr,
@@ -960,6 +1421,9 @@ def compute_uncertainty_budget(
     hubble_constant: float = 67.36,
     omega_m: float = 0.315,
     speed_of_light_kms: float = 3e5,
+    noise_model: str = "scaling",
+    mode_weighted: bool = False,
+    n_patch: int = 1,
 ) -> UncertaintyBudget:
     """
     Run the full uncertainty-budget chain on a set of power spectra.
@@ -997,17 +1461,51 @@ def compute_uncertainty_budget(
         Speed of light [m s^-1], for the observed wavelength.
     hubble_constant, omega_m, speed_of_light_kms : float, optional
         Background cosmology.
+    noise_model : {'scaling', 'physical'}, optional
+        Which 21 cm thermal-noise model to use.
+
+        - ``'scaling'`` (default) — :func:`hera_thermal_noise_power`, flat in
+          ``k`` and carrying an arbitrary Mpc³ normalisation.  Reproduces every
+          number this pipeline produced before the ``'physical'`` option
+          existed.
+        - ``'physical'`` — :func:`hera_thermal_noise_power_physical`,
+          Parsons (2017) Eq. 12 / La Plante Eq. 11, resolved in ``k_perp``
+          through the HERA baseline distribution.  Roughly 10³ larger than
+          the scaling estimate and, unlike it, infinite where no baseline
+          samples the mode.
+    mode_weighted : bool, optional
+        Apply the La Plante Eq. 19 weighting ``sqrt(N_patch dN)`` when summing
+        bins, using the estimator's own ``mode_counts``.  Default ``False``,
+        which preserves the pre-existing unweighted total.
+    n_patch : int, optional
+        Independent survey patches, ``N_patch`` in Eq. 19.
 
     Returns
     -------
     UncertaintyBudget
         Every term of the budget, plus the SNR maps.
 
+    Raises
+    ------
+    ValueError
+        If ``noise_model`` is not one of the two accepted values.
+
     References
     ----------
-    La Plante et al. (2023), arXiv:2205.09770 — Eqs. 15–17.
+    La Plante et al. (2023), arXiv:2205.09770 — Eqs. 10, 11, 15–17, 18–20.
+    Parsons (2017), "Power Spectrum Normalizations for HERA" — Eq. 12.
     Pober et al. (2014), ApJ 782, 66 — the wedge buffer.
+
+    Notes
+    -----
+    Both ``noise_model='physical'`` and ``mode_weighted=True`` change every
+    number the budget reports, so both default to the historical behaviour.
+    ``docs/uncertainty_budget.md`` §6.5 quantifies each against the papers.
     """
+    if noise_model not in ("scaling", "physical"):
+        raise ValueError(
+            f"noise_model must be 'scaling' or 'physical', got {noise_model!r}"
+        )
     cosmology = dict(
         hubble_constant=hubble_constant,
         omega_m=omega_m,
@@ -1038,12 +1536,23 @@ def compute_uncertainty_budget(
 
     # ── Noise ─────────────────────────────────────────────────────────────
     t_sys_mK, observed_frequency = system_temperature(z_obs, f_21_hz)
-    p_noise_21cm = hera_thermal_noise_power(
-        z_obs=z_obs,
-        integration_time=integration_time,
-        bandwidth=bandwidth,
-        f_21_hz=f_21_hz,
-    )
+    if noise_model == "physical":
+        p_noise_21cm = hera_thermal_noise_power_physical(
+            k_perp=spectra.k_perp,
+            z_obs=z_obs,
+            integration_time=integration_time,
+            dish_diameter=dish_diameter,
+            f_21_hz=f_21_hz,
+            speed_of_light_mps=speed_of_light_mps,
+            **cosmology,
+        )
+    else:
+        p_noise_21cm = hera_thermal_noise_power(
+            z_obs=z_obs,
+            integration_time=integration_time,
+            bandwidth=bandwidth,
+            f_21_hz=f_21_hz,
+        )
     p_noise_galaxy = 1.0 / mean_galaxy_density
 
     # ── Variance and SNR ──────────────────────────────────────────────────
@@ -1054,6 +1563,8 @@ def compute_uncertainty_budget(
         P_noise_21cm=p_noise_21cm,
         P_noise_galaxy=p_noise_galaxy,
         outside_wedge=outside_wedge,
+        mode_counts=spectra.mode_counts if mode_weighted else None,
+        n_patch=n_patch,
     )
 
     return UncertaintyBudget(
@@ -1074,6 +1585,8 @@ def compute_uncertainty_budget(
         integration_time=float(integration_time),
         bandwidth=float(bandwidth),
         mean_galaxy_density=float(mean_galaxy_density),
+        noise_model=noise_model,
+        mode_weighted=bool(mode_weighted),
         snr=snr,
     )
 

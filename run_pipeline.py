@@ -287,6 +287,8 @@ def observational_stage(
     wedge_buffer: Optional[float] = None,
     integration_time: Optional[float] = None,
     bandwidth: Optional[float] = None,
+    noise_model: str = "scaling",
+    mode_weighted: bool = False,
     quiet: bool = False,
 ) -> analysis.UncertaintyBudget:
     """
@@ -316,6 +318,13 @@ def observational_stage(
         Integration-time override [s].  Defaults to the attribute, or 1000 h.
     bandwidth : float, optional
         Bandwidth override [Hz].  Defaults to the attribute, or 8 MHz.
+    noise_model : {'scaling', 'physical'}, optional
+        21 cm thermal-noise model.  ``'physical'`` uses Parsons (2017) Eq. 12
+        / La Plante Eq. 11 resolved through the HERA baseline distribution;
+        ``'scaling'`` (default) keeps the flat historical estimate.
+    mode_weighted : bool, optional
+        Apply the La Plante Eq. 19 ``sqrt(N_patch dN)`` weighting when summing
+        bins.  Default ``False``, preserving the historical total.
     quiet : bool, optional
         Suppress progress output.
 
@@ -346,6 +355,8 @@ def observational_stage(
         hubble_constant=data.get("HUBBLE_CONSTANT", 67.36),
         omega_m=data.get("OMEGA_M_0", 0.315),
         speed_of_light_kms=data.get("SPEED_OF_LIGHT_KMS", 3e5),
+        noise_model=noise_model,
+        mode_weighted=mode_weighted,
     )
 
     log(f"  T_sys at {budget.observed_frequency_hz / 1e6:.2f} MHz "
@@ -360,8 +371,22 @@ def observational_stage(
     log(f"  Modes outside wedge : "
         f"{budget.outside_wedge.sum()}/{budget.outside_wedge.size} "
         f"({budget.fraction_outside_wedge:.1%})", quiet)
-    log(f"  P_N,21 / P_N,gal    : {budget.snr.P_noise_21cm:.4g} mK² Mpc³ / "
+    # P_noise_21cm is k_perp-resolved under --noise-model physical, so report
+    # its finite range rather than assuming a scalar.
+    noise_21cm = np.asarray(budget.snr.P_noise_21cm, dtype=float)
+    if noise_21cm.ndim == 0:
+        noise_text = f"{float(noise_21cm):.4g} mK² Mpc³"
+    else:
+        finite = noise_21cm[np.isfinite(noise_21cm)]
+        unmeasurable = int((~np.isfinite(noise_21cm)).sum())
+        noise_text = (
+            f"{finite.min():.4g}–{finite.max():.4g} mK² Mpc³ over k⊥"
+            + (f" ({unmeasurable} bins unsampled)" if unmeasurable else "")
+        )
+    log(f"  P_N,21 / P_N,gal    : {noise_text} / "
         f"{budget.snr.P_noise_galaxy:.4g} Mpc³", quiet)
+    log(f"  Noise model         : {budget.noise_model}"
+        f"   mode-weighted: {budget.mode_weighted}", quiet)
     log(f"  σ² from cosmic var. : "
         f"{budget.cosmic_variance_fraction:.1%}", quiet)
     log(f"  Total SNR (outside wedge) : {budget.total_snr:.3g} σ", quiet)
@@ -656,11 +681,19 @@ def build_summary(
     # summary is overwritten every run; the manifest it names is not, so an
     # analysis-only run can still say which simulation its numbers came from.
     # Absent for HDF5 files written before run manifests existed.
+    # h5py returns numpy scalars (np.int64, np.bool_), which json.dump cannot
+    # serialise — it raises partway through and leaves a truncated, unparseable
+    # file.  Coerce here rather than relying on a serialiser fallback.
+    def _plain(value: Any) -> Any:
+        """Convert an HDF5 attribute to a JSON-serialisable Python scalar."""
+        if value is None or isinstance(value, str):
+            return value
+        item = getattr(value, "item", None)
+        return item() if callable(item) else value
+
     summary["source_run"] = {
-        "run_id": data.attrs.get("run_id"),
-        "run_manifest": data.attrs.get("run_manifest"),
-        "random_seed": data.attrs.get("random_seed"),
-        "n_threads": data.attrs.get("n_threads"),
+        key: _plain(data.attrs.get(key))
+        for key in ("run_id", "run_manifest", "random_seed", "n_threads")
     }
 
     # Backwards-compatible alias: earlier summaries carried these five keys
@@ -707,10 +740,24 @@ def write_summary(summary: Dict[str, Any], path: str) -> None:
         Output of :func:`build_summary`.
     path : str
         Destination file.
+
+    Notes
+    -----
+    ``default=str`` is a backstop, not the primary defence: values are coerced
+    to plain Python scalars in :func:`build_summary`.  Non-finite floats are
+    emitted by ``json`` as ``Infinity`` / ``NaN``, which is valid for Python's
+    own ``json.load`` but not strict JSON — the ``physical`` noise model
+    produces ``inf`` for unsampled ``k_perp`` bins, so consumers outside
+    Python should expect them.
     """
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(summary, f, indent=2)
+    # Written to a temporary file and renamed: json.dump writes incrementally,
+    # so a mid-write failure would otherwise leave a truncated summary that
+    # looks valid until something tries to parse it.
+    temporary = f"{path}.tmp"
+    with open(temporary, "w") as f:
+        json.dump(summary, f, indent=2, default=str)
+    os.replace(temporary, path)
 
 
 def print_report(summary: Dict[str, Any]) -> None:
@@ -839,6 +886,18 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
              "for the 'euclid' figure group (default: number)",
     )
 
+    parser.add_argument(
+        "--noise-model", choices=("scaling", "physical"), default="scaling",
+        help="21 cm thermal noise: 'scaling' (default, flat, historical) or "
+             "'physical' (Parsons 2017 Eq. 12 / La Plante Eq. 11, resolved in "
+             "k_perp through the HERA baseline distribution, ~10^3 larger)",
+    )
+    parser.add_argument(
+        "--mode-weighted", action="store_true",
+        help="apply the La Plante Eq. 19 sqrt(N_patch dN) mode weighting when "
+             "summing bins (default off; raises the total SNR ~10x)",
+    )
+
     budget_group = parser.add_argument_group(
         "uncertainty budget",
         "Survey and instrument overrides. None of these affects the simulated "
@@ -951,6 +1010,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             wedge_buffer=args.wedge_buffer,
             integration_time=args.integration_time,
             bandwidth=args.bandwidth,
+            noise_model=args.noise_model,
+            mode_weighted=args.mode_weighted,
             quiet=quiet,
         )
         save_uncertainty_budget(args.products, budget)

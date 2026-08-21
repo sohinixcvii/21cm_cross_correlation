@@ -198,6 +198,17 @@ Simulation geometry, ⟨x_HI⟩, the large-scale cross-spectrum sign, photo-$z$
 smearing σ_r, both wedge slopes, the fraction of modes outside the wedge,
 noise levels, the total SNR, the Euclid selection counts, and ⟨b_g⟩.
 
+### Foreground testing (notebook only)
+
+`src/foregrounds.py` is not part of the batch pipeline. It adds a synthetic
+foreground to the brightness-temperature field before the spectra are computed
+and removes a controllable fraction of it, so `21cmfast_HERAxEuclid_lightcone.ipynb`
+§7e can measure how contamination and incomplete removal degrade the
+cross-correlation. It consumes `compute_all_power_spectra` and
+`compute_uncertainty_budget` without modifying either. The removal step is a
+deliberately simple placeholder, not a mitigation algorithm — see the module
+docstring.
+
 See `README.md` for the full science background and equation references,
 `docs/HPC.md` for the complete parameter-level specification of the run (every
 configuration value, evaluated formula, output file, and known

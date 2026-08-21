@@ -436,6 +436,109 @@ the variance split, and the total SNR.
 
 ---
 
+## 6.5 Validation against the cited literature
+
+Checked term by term against the source papers on 2026-08-21. Three formulae
+reproduce their references exactly; two documented simplifications are larger
+than "simplification" suggests, and are quantified here.
+
+| Term | Cited as | Verdict |
+|---|---|---|
+| Horizon wedge slope | La Plante Eq. 10 | ✅ **exact** |
+| Cross-spectrum variance | La Plante Eq. 15 | ✅ **exact in form** |
+| Galaxy variance $\sigma_\mathrm{gal}$ | La Plante Eq. 17 | ✅ **exact** |
+| $T_0(z)$ cancellation | La Plante Eq. 16 | ✅ **algebra confirmed** |
+| $T_\mathrm{sys}$ model | Pober et al. (2014) | ✅ **standard**; 328.6 K at $z=7$ |
+| Wedge buffer 0.0677 Mpc⁻¹ | Pober et al. (2014) "moderate" | ✅ **correct** (0.1 $h$ Mpc⁻¹) |
+| Mode weighting | La Plante Eq. 19 | ⚙️ **implemented, opt-in** (`--mode-weighted`) |
+| Thermal noise $P_{N,21}$ | La Plante Eq. 11 | ⚙️ **implemented, opt-in** (`--noise-model physical`) |
+
+**Horizon slope (Eq. 10).** The paper writes
+$m(z) = \lambda(z) D_c(z) f_{21} H(z) / [c^2 (1+z)^2]$. Substituting
+$\lambda(z) = c(1+z)/f_{21}$ gives $m = D_c H / [c(1+z)]$ — precisely
+`horizon_wedge_slope`. Not an approximation; the same expression.
+
+**Variance (Eqs. 15–17).** Eq. 15 is
+$\sigma^2_{21\times\mathrm{gal}} = \tfrac12[P^2_{21\times\mathrm{gal}} + \sigma_{21}\sigma_\mathrm{gal}]$,
+matching `cross_power_snr` exactly. Eq. 16 carries $1/T_0(z)^2$ on the 21 cm
+side and Eq. 17 carries none on the galaxy side, exactly as §2.5 assumes; the
+cancellation argument there is confirmed.
+
+**Mode weighting (Eqs. 18–20) — the significant one.** Eq. 15 is written *per
+mode*; the paper combines bins through
+$\hat{s} = \sqrt{N_\mathrm{patch}\,dN}\;P_\times/\sigma_\times$ (Eq. 19) with
+$dN = k_\perp^2 k_\parallel V_\mathrm{survey} (2\pi)^{-2}\,d\ln k_\perp\, d\ln k_\parallel$
+(Eq. 18). This pipeline computes $P_\times/\sigma_\times$ and stops.
+
+The omitted $dN$ is **already available**: `PowerSpectra.mode_counts` divided
+by 2 (the FFT of a real field is Hermitian, so half its cells are redundant)
+reproduces Eq. 18 to a median 4.7 % on the fiducial grid — they are the same
+quantity. On the stored $128^2\times100$, 256 Mpc geometry at $z=7$, over the
+65 usable bins outside the wedge:
+
+| $\sqrt{dN}$ | min 2.0 | median 8.2 | max 64.1 |
+|---|---|---|---|
+
+so the reported total SNR is low by roughly **an order of magnitude** (≈18×
+if the per-bin SNR were uniform). Directionally safe — the pipeline
+under-claims — but too large to leave as a footnote.
+
+**Thermal noise (Eq. 11).** `hera_thermal_noise_power` returns
+$T_\mathrm{sys}^2 \times 10^3 / (t_\mathrm{int}\Delta\nu) = 3.75$ mK² Mpc³ at
+$z = 7$ for 1000 h. Eq. 11 is
+$P^\mathrm{noise}_{21} = T^2_\mathrm{sys}\Omega_p^2 X^2 Y / [\Omega_{pp} t_\mathrm{int} N_\mathrm{pol} N_\mathrm{bl}(u)]$.
+Evaluated for HERA at $z = 7$ ($X^2Y = 1227$ Mpc³ sr⁻¹ Hz⁻¹,
+$\Omega_p^2/\Omega_{pp} \approx 0.19$ sr, 1000 h, 2 polarisations):
+
+| $N_\mathrm{bl}(u)$ | 50 | 200 | 1000 | 5000 |
+|---|---|---|---|---|
+| $P_{N,21}$ [mK² Mpc³] | 4.9 × 10⁴ | 1.2 × 10⁴ | 2.4 × 10³ | 4.9 × 10² |
+
+Cross-checked independently against published HERA forecasts
+($\Delta^2_N \sim 10$ mK² at $k = 0.2$ for 1000 h $\Rightarrow$
+$P_N = 2\pi^2\Delta^2/k^3 \approx 2.5\times10^4$ mK² Mpc³). Both routes land
+near $10^4$ mK² Mpc³ against the implemented 3.75 — **the placeholder is
+roughly four orders of magnitude too small, and in the optimistic direction.**
+It also carries no $k_\perp$ dependence, so it cannot reproduce the steep rise
+in noise at high $k_\perp$ where few baselines sample the mode.
+
+Consequence for $\sigma_{21} = |P_{21}| + P_{N,21}$: at 3.75 the term is
+negligible beside $P_{21}$, so the 21 cm side of the budget looks
+sample-variance limited. With a literature-scale $P_{N,21}$ it dominates by
+$\sim$10×, raising $\sigma_\times$ by $\sim$3–4× and lowering the SNR by the
+same factor.
+
+**Net effect of the two.** They pull in opposite directions and do *not*
+cancel in general — the mode weighting is a property of the survey volume and
+binning, the noise of the instrument and integration time.
+
+### Both are now implemented, and both are opt-in
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--mode-weighted` | off | Applies Eq. 19's $\sqrt{N_\mathrm{patch}\,dN}$ using the estimator's own `mode_counts` |
+| `--noise-model physical` | `scaling` | Swaps `hera_thermal_noise_power` for `hera_thermal_noise_power_physical` |
+
+The defaults reproduce every number this pipeline produced before they
+existed, so no stored result is silently invalidated. Measured on a
+$48^2 \times 100$, 96 Mpc test run at $\sigma_z = 0.02$:
+
+| Configuration | Total SNR | vs default |
+|---|---|---|
+| default | 0.0500 σ | — |
+| `--mode-weighted` | 0.1420 σ | ×2.8 |
+| `--noise-model physical` | 0.0056 σ | ÷8.9 |
+| both | 0.0159 σ | ÷3.1 |
+
+The physical model also reports which bins the array cannot measure at all
+(`inf` noise), which the flat estimate cannot express.
+
+`UncertaintyBudget` records `noise_model` and `mode_weighted`, and both reach
+`pipeline_summary.json`, so a stored result always says which of the four
+combinations produced it.
+
+---
+
 ## 7. Known limitations
 
 ### 7.1 The wedge and the photo-$z$ kernel do not overlap
@@ -451,11 +554,12 @@ the fuller treatment.
 
 ### 7.2 The thermal noise is $k$-independent
 
-`hera_thermal_noise_power` returns a scalar. A real interferometer's noise
-rises steeply at high $k_\perp$ where fewer baselines sample the mode. La
-Plante Eq. 11 resolves this via $X^2 Y \Omega' / n(k_\perp)$; a worked
-implementation exists in `21cm_galaxy_cross_uncertainty.ipynb` but is
-deliberately **not** ported here — this document's scope is the HERAxEuclid
+`hera_thermal_noise_power` returns a scalar, and — as quantified in §6.5 —
+one about **10⁴ times smaller** than La Plante Eq. 11 or published HERA
+forecasts give. A real interferometer's noise also rises steeply at high
+$k_\perp$ where fewer baselines sample the mode. La Plante Eq. 11 resolves
+both via $X^2 Y \Omega' / n(k_\perp)$; a worked implementation exists in
+`21cm_galaxy_cross_uncertainty.ipynb` but is deliberately **not** ported here — this document's scope is the HERAxEuclid
 notebook's budget. For publication forecasts, replace with
 [21cmSense](https://github.com/rasg-affiliates/21cmSense). See also
 `HPC.md` §11.5.
@@ -463,11 +567,16 @@ notebook's budget. For publication forecasts, replace with
 ### 7.3 `mode_counts` is computed but not used
 
 `PowerSpectra.mode_counts` records how many Fourier modes were averaged into
-each bin. La Plante's Eqs. 15–17 are written per *single* mode; averaging $N_k$
-of them divides the variance by $N_k$. Neither the notebook nor the pipeline
-applies that factor, so **the quoted total SNR is a per-bin quadrature sum and
-is conservative** — a mode-weighted total would be larger. Tracked in
-`HPC.md` §11.4.
+each bin. La Plante's Eqs. 15–17 are written per *single* mode; Eqs. 18–20
+combine them with a $\sqrt{N_\mathrm{patch}\,dN}$ weighting. Neither the
+notebook nor the pipeline applies that factor, so **the quoted total SNR is a
+per-bin quadrature sum and is conservative** — a mode-weighted total would be
+larger.
+
+§6.5 quantifies it: `mode_counts / 2` *is* La Plante's $dN$ (agreeing to 4.7 %
+on the fiducial grid), and the missing $\sqrt{dN}$ runs from 2.0 to 64.1 with
+a median of 8.2 over the usable bins — roughly an order of magnitude in the
+total. Tracked in `HPC.md` §11.4.
 
 ### 7.4 `mean_galaxy_density` has an unresolved unit
 
@@ -513,9 +622,12 @@ Last recorded result (stored simulation, default parameters, 2026-08-17):
 
 ## 9. References
 
-- **La Plante, Kaur, Battaglia et al. (2023)**, ApJ 944, 59 —
-  [arXiv:2205.09770](https://arxiv.org/abs/2205.09770) — Eqs. 15–17, the
-  variance formalism; Eq. 11, the thermal-noise model not ported here.
+- **La Plante, Mirocha, Gorce, Lidz & Parsons (2023)**, ApJ 944, 59 —
+  [arXiv:2205.09770](https://arxiv.org/abs/2205.09770), *"Prospects for
+  21cm-Galaxy Cross-Correlations with HERA and the Roman High-Latitude
+  Survey"* — Eqs. 15–17, the variance formalism; Eq. 10, the wedge slope;
+  Eq. 11, the thermal-noise model not ported here; Eqs. 18–20, the mode
+  weighting not ported here.
 - **Lidz et al. (2009)**, ApJ 690, 252 —
   [arXiv:0806.1055](https://arxiv.org/abs/0806.1055) — original derivation of
   the cross-spectrum variance.

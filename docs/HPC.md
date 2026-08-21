@@ -1076,6 +1076,8 @@ Full table in §3.1. The four that matter for an HPC run:
 | `--plots` | `all` | `--plots power snr` skips the catalogue read entirely; `--plots none` gives numbers only. |
 | `--m-uv-bright` | −22.0 | The analysis-stage bright cut. Keep it equal to `M_UV_bright` at `run_simulation.py:492`. |
 | `--galaxy-weighting` | `number` | Only affects the `euclid` figure group's rebuilt δ_gal. It does **not** change the stored field or any power spectrum. |
+| `--noise-model` | `scaling` | `physical` swaps the flat thermal-noise estimate for the HERA baseline-density model (Parsons 2017 Eq. 12). ~10³ larger, and `inf` where the array has no baselines. Changes every SNR number. |
+| `--mode-weighted` | off | Applies La Plante Eq. 19's `sqrt(N_patch dN)` weighting. Raises the total SNR ~10×. Changes every SNR number. |
 
 ### 13.4 Which edits actually take effect, and when
 

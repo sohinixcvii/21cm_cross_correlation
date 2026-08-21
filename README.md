@@ -12,7 +12,7 @@ The repository holds three things:
 |---|---|---|
 | **HPC pipeline** | The production path: 21cmFAST lightcone → galaxy field → power spectra → uncertainty budget → figures, driven by one command | `run_pipeline.py`, `submit_job.sh` |
 | **Notebooks** | The same science interactively — an analytical-only forecast, a monolithic lightcone notebook, and the pipeline's Parts 2 and 3 | `21cm_galaxy_cross_uncertainty.ipynb`, `21cmfast_HERAxEuclid_lightcone.ipynb`, `notebooks/` |
-| **`src/`** | The shared implementation both of the above import, so they cannot drift apart | `src/analysis.py`, `src/figures.py`, `src/dataio.py`, `src/conversions.py` |
+| **`src/`** | The shared implementation both of the above import, so they cannot drift apart | `src/analysis.py`, `src/figures.py`, `src/dataio.py`, `src/conversions.py`, `src/foregrounds.py`, `src/provenance.py` |
 
 Detail that used to sit in this file — per-notebook structure, equations and
 fiducial parameters, the figure-by-figure literature references, the 21cmFAST
@@ -122,6 +122,8 @@ attribute of the stored HDF5:
 
 | Option | Stored default | Meaning |
 |--------|----------------|---------|
+| `--noise-model {scaling,physical}` | `scaling` | 21 cm thermal noise. `physical` uses Parsons (2017) Eq. 12 / La Plante Eq. 11, resolved in $k_\perp$ through the HERA baseline distribution — ~10³ larger than the default flat estimate, and infinite where no baseline samples the mode |
+| `--mode-weighted` | off | Apply La Plante Eq. 19's $\sqrt{N_\mathrm{patch}\,dN}$ weighting when summing bins, using the estimator's own `mode_counts`. Raises the total SNR ~10× |
 | `--sigma-z σ` | `0.45` | absolute photo-$z$ uncertainty, **not** $\sigma_z/(1+z)$ — the Euclid requirement at $z = 7$ |
 | `--wedge-buffer k` | `0.0677` Mpc⁻¹ | foreground-wedge margin — $0.1\ h\ \mathrm{Mpc}^{-1}$, Pober et al. (2014) "moderate" |
 | `--integration-time s` | `3.6e6` (1000 h) | HERA integration time |
@@ -222,6 +224,28 @@ in step with it so both describe the same experiment:
 | `integration_time`, `bandwidth` | `3.6e6` s, `8e6` Hz | 1000 h, 8 MHz |
 | `wedge_buffer` | `0.0677` | Mpc⁻¹ |
 | `n_bins_perp`, `n_bins_parallel` | `20`, `20` | $(k_\perp, k_\parallel)$ binning |
+
+**§7e — foreground contamination and removal.** `src/foregrounds.py` injects
+a synthetic diffuse Galactic synchrotron foreground (plus an optional
+point-source component) into `brightness_temp_field` before any power spectrum
+is computed, then removes a controllable fraction of it. Each removal level is
+pushed through `compute_all_power_spectra` and `compute_uncertainty_budget`
+unchanged. Set `FOREGROUND_AMPLITUDE` (foreground RMS as a multiple of the
+signal RMS; real foregrounds are $10^4$–$10^5$) and `REMOVAL_FRACTIONS` in the
+§7e.1 cell.
+
+Two caveats the section states in full, both worth knowing before quoting a
+number from it:
+
+- **The removal step is a placeholder, not an algorithm.** It subtracts an
+  exactly-correct template of the field that was injected. It is a knob for
+  *"what if removal were this good?"* — not GMCA, PCA, polynomial fitting or
+  delay filtering, and it has none of their failure modes.
+- **A contaminated SNR flatters the result.** Foregrounds are unbiased in the
+  ensemble mean, but one realisation carries a chance cross-correlation that
+  grows *linearly* with foreground amplitude, so `|P_×|/σ_×` has a
+  contaminated numerator as well as denominator. §7e.3 plots a *signal-only*
+  SNR beside the as-measured one; the gap is a spurious detection.
 
 **§3c and §5c — after the Euclid cut.** The lightcone notebook mirrors the
 `euclid` figure group: §3c plots the galaxies, halo masses and SFRs that

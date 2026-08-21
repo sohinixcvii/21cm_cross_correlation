@@ -7,6 +7,243 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Mode weighting + physical HERA noise, 2026-08-21 ────────────────── -->
+
+### Added
+
+Both discrepancies found by the literature validation below are now
+implemented, and **both are opt-in** — the defaults reproduce every number
+this pipeline produced before them, so no stored result is silently
+invalidated. `UncertaintyBudget` records which was used, and both reach
+`pipeline_summary.json`.
+
+- **`--mode-weighted`** — La Plante et al. (2023) Eq. 19's
+  $\sqrt{N_\mathrm{patch}\,dN}$ weighting, using the estimator's own
+  `mode_counts`. `dN` is `mode_counts / 2`, since the FFT of a real field is
+  Hermitian; verified against Eq. 18 to a median 4.7 % on the fiducial grid.
+  `cross_power_snr` gains `mode_counts` and `n_patch`, both defaulting to the
+  unweighted behaviour.
+
+- **`--noise-model physical`** — a real HERA instrument model replacing the
+  flat estimate:
+
+  $$P_N(k_\perp) = \frac{X^2 Y \,\Omega_\mathrm{eff}\, \mathrm{NEB}\, T_\mathrm{sys}^2}{N_\mathrm{pol}\, t_\mathrm{int}\, N_\mathrm{bl}(k_\perp)}$$
+
+  This is Parsons (2017) HERA memo Eq. 12, algebraically identical to
+  La Plante Eq. 11 since $\Omega_\mathrm{eff} \equiv \Omega_P^2/\Omega_{PP}$.
+  Four new functions: `cosmological_scalar_x2y`, `hera_beam_solid_angles`,
+  `hera_baseline_counts`, `hera_thermal_noise_power_physical`.
+  `hera_thermal_noise_power` is untouched and remains the default.
+
+  The baseline count is computed, not assumed: an 11-per-side hexagonal core
+  at 14.6 m spacing (DeBoer et al. 2017) is built, every pair formed, and the
+  baselines gridded into $uv$-cells one antenna footprint $D/\lambda$ across.
+  **Per uv-cell, not per $k_\perp$ bin** — only baselines within one footprint
+  sample the same mode and integrate down coherently; summing the whole bin
+  would double-count the redundancy that the mode weighting already handles,
+  and under-predicted the noise several-fold in a first pass.
+
+  At $z = 7$ for 1000 h this gives 290 baselines per cell at
+  $k_\perp = 0.010$ falling to 12 at $k_\perp = 0.123$, hence
+  $P_N = 3.9\times10^3 \to 9.8\times10^4$ mK² Mpc³ — bracketing the
+  $\approx 2.5\times10^4$ implied by published HERA forecasts, against the
+  default estimate's 3.75. Beyond $k_\perp \approx 0.13$ Mpc⁻¹ the 292 m core
+  has no baselines at all and the noise is `inf`: those modes are
+  *unmeasurable*, a statement the flat estimate cannot make.
+
+  Measured on a $48^2\times100$, 96 Mpc test run at $\sigma_z = 0.02$:
+
+  | Configuration | Total SNR | vs default |
+  |---|---|---|
+  | default | 0.0500 σ | — |
+  | `--mode-weighted` | 0.1420 σ | ×2.8 |
+  | `--noise-model physical` | 0.0056 σ | ÷8.9 |
+  | both | 0.0159 σ | ÷3.1 |
+
+### Cited
+
+- **`NUMBERS_AND_SOURCES.md` extended to cover every value introduced today**,
+  and six previously unsourced entries traced:
+
+  | Value | Now cited to |
+  |---|---|
+  | `T_RECEIVER_K`, `T_SKY_300MHZ_K`, `SKY_SPECTRAL_INDEX`, 300 MHz pivot | 21cmSense `calc_sense.py` (`Tsky = 60e3*(3e8/freq)**2.55`), from Pober et al. (2013, 2014) |
+  | `dish_diameter`, array layout | DeBoer et al. (2017), PASP 129, 045001 |
+  | `F_21_MHZ` | Hydrogen hyperfine frequency |
+
+  New §7 (HERA instrument model, 6 constants + 4 formulas), §8 (foreground
+  module, 11 constants + 3 formulas), §9 (run-manifest calibration, 4
+  measured values, explicitly labelled internal rather than literature). Every
+  constant also carries its citation inline in the code.
+
+- **A convention difference worth knowing.** The `T_sys` model here is
+  21cmSense's `T_sky = 60 K (λ/1 m)^2.55` — 352 K at 150 MHz. DeBoer et al.
+  (2017) Table 2 instead give `T_sys = 100 + 120(ν/150 MHz)^-2.55` K, whose
+  sky term is 120 K at 150 MHz: **a factor 2.9 colder, ~8× in $P_N$.** The
+  21cmSense values are kept — they are what the notebook inlined and the more
+  conservative choice — but the difference is now recorded at the constants,
+  in `system_temperature`'s docstring, and in `NUMBERS_AND_SOURCES.md` §3, so
+  it is not mistaken for an error.
+
+### Fixed
+
+- **`pipeline_summary.json` was being written truncated and unparseable** for
+  any HDF5 produced by the current `run_simulation.py`. The `source_run` block
+  added earlier today reads `random_seed` and `n_threads` straight from the
+  HDF5, and `h5py` returns those as `np.int64`. `json.dump` cannot serialise a
+  numpy scalar and raises *partway through the write*, leaving a file that
+  ends mid-key. It went unnoticed because the test fixture's HDF5 predates
+  those attributes, so `.get()` returned `None` and the path never ran.
+
+  Attributes are now coerced to plain Python scalars in `build_summary`, and
+  `write_summary` writes to a temporary file and renames, so a failed write
+  can no longer leave a half-valid summary behind. Regression test:
+  `test_summary_is_valid_json_with_provenance_attrs`, which stamps the
+  attributes onto the fixture first.
+
+<!-- ─── Literature validation of the budget, 2026-08-21 ─────────────────── -->
+
+### Validated
+
+- **The uncertainty budget and SNR chain checked term by term against the
+  cited papers** (La Plante et al. 2023, arXiv:2205.09770; Pober et al. 2014).
+  Full write-up in [`docs/uncertainty_budget.md`](docs/uncertainty_budget.md)
+  §6.5. **No code changed** — the two discrepancies below would move every
+  number the pipeline has produced, which is a project decision.
+
+  | Term | Cited as | Verdict |
+  |---|---|---|
+  | Horizon wedge slope | La Plante Eq. 10 | ✅ exact |
+  | Cross-spectrum variance | La Plante Eq. 15 | ✅ exact in form |
+  | Galaxy variance | La Plante Eq. 17 | ✅ exact |
+  | $T_0(z)$ cancellation | La Plante Eq. 16 | ✅ algebra confirmed |
+  | $T_\mathrm{sys}$, wedge buffer | Pober et al. (2014) | ✅ correct |
+  | Mode weighting | La Plante Eq. 19 | ❌ omitted |
+  | Thermal noise | La Plante Eq. 11 | ❌ placeholder, ~10⁴ low |
+
+  The horizon slope is worth recording as *identical*, not approximate: the
+  paper's $m = \lambda D_c f_{21} H/[c^2(1+z)^2]$ reduces to the implemented
+  $D_c H/[c(1+z)]$ on substituting $\lambda = c(1+z)/f_{21}$.
+
+### Two discrepancies quantified
+
+- **The Eq. 19 mode weighting is missing, and it is worth ~an order of
+  magnitude.** La Plante combines bins as
+  $\hat{s} = \sqrt{N_\mathrm{patch}\,dN}\,P_\times/\sigma_\times$; the pipeline
+  computes $P_\times/\sigma_\times$ and stops. The omitted $dN$ is already on
+  hand — `mode_counts / 2` (the FFT of a real field is Hermitian) reproduces
+  Eq. 18 to a median 4.7 %. Over the 65 usable bins of the fiducial
+  $128^2\times100$ grid, $\sqrt{dN}$ runs 2.0–64.1 with median 8.2, so the
+  reported total SNR is low by roughly 18×. Previously logged as
+  "conservative" in §7.3 without a number; the number makes it more than a
+  footnote.
+
+- **`hera_thermal_noise_power` is ~4 orders of magnitude too small, in the
+  optimistic direction.** It returns 3.75 mK² Mpc³ at $z=7$ for 1000 h.
+  La Plante Eq. 11 evaluated for HERA ($X^2Y = 1227$ Mpc³ sr⁻¹ Hz⁻¹,
+  $\Omega_p^2/\Omega_{pp} \approx 0.19$ sr) gives $5\times10^2$–$5\times10^4$
+  mK² Mpc³ depending on $N_\mathrm{bl}(u)$, and published HERA forecasts
+  ($\Delta^2_N \sim 10$ mK² at $k=0.2$) independently give
+  $\approx 2.5\times10^4$. At the implemented value the 21 cm side of
+  $\sigma_{21} = |P_{21}| + P_{N,21}$ is sample-variance limited, which is not
+  true of HERA at 1000 h.
+
+  The docstring already called this "a scaling estimate, not a full instrument
+  model" — accurate, but it does not convey a factor of $10^4$, so §7.2 now
+  states the number.
+
+  The two pull in opposite directions and do not cancel in general; applying
+  both would move the fiducial total SNR up by roughly 5×.
+
+### Fixed
+
+- **Author list for La Plante et al. (2023)** in
+  `docs/uncertainty_budget.md` §9 — recorded as "La Plante, Kaur, Battaglia
+  et al."; the paper is La Plante, Mirocha, Gorce, Lidz & Parsons,
+  *"Prospects for 21cm-Galaxy Cross-Correlations with HERA and the Roman
+  High-Latitude Survey"*. Title and Eq. numbers now cited alongside.
+
+<!-- ─── Foreground injection and removal, 2026-08-21 ────────────────────── -->
+
+### Added
+
+- **`src/foregrounds.py`** — synthetic foreground injection and a
+  parametrised removal knob, so the effect of contamination and of
+  *incomplete* removal on the cross-power spectrum and its detectability can
+  be measured. Nothing in the verified chain is modified: contaminated fields
+  go through `compute_all_power_spectra` and `compute_uncertainty_budget`
+  exactly as clean ones do.
+
+  | Function | Description |
+  |---|---|
+  | `simulate_diffuse_foreground` | Diffuse Galactic synchrotron cube [mK] on the lightcone grid |
+  | `simulate_point_source_foreground` | Poisson point-source component, angularly flatter |
+  | `inject_foreground` | Combines both, scales to `foreground_amplitude × signal RMS` |
+  | `remove_foreground` | The removal knob — a placeholder, see below |
+
+  The model is the standard parametrised angular/frequency power law
+  (Santos, Cooray & Knox 2005; Shaw et al. 2014) with amplitude and spectral
+  index from the Global Sky Model (de Oliveira-Costa et al. 2008; Zheng
+  et al. 2017, GSM2016); point sources follow Ali, Bharadwaj & Chengalur
+  (2008) and Bernardi et al. (2009). The line-of-sight structure is
+  *emergent* — it follows from a smooth power-law spectrum with a spatially
+  varying index, rather than from an imposed $k_\parallel$ power law.
+
+- **Notebook §7e**, after the §7d wedge cell: injection at a chosen
+  `FOREGROUND_AMPLITUDE`, a sweep over `REMOVAL_FRACTIONS`
+  (0/50/90/99/99.9/100 %), and three panels — $P_{21}$ showing where the
+  foreground sits and the removal working, $|P_\times|$ against
+  $\sigma_\times$, and total SNR versus removal fraction.
+
+### Two findings worth recording
+
+- **Spectral smoothness does not confine the contamination to low
+  $k_\parallel$.** `compute_cylindrical_cross_power` takes a bare FFT with no
+  line-of-sight taper, so a smooth-but-non-periodic spectrum is discontinuous
+  at the box edge and leaks along the whole $k_\parallel$ axis as
+  $\approx k_\parallel^{-1.5}$. The slope is a property of the window, not the
+  sky: a bare linear ramp with no angular structure leaks with the same slope,
+  and widening the band does not change it. **Wedge excision alone therefore
+  does not remove foreground power from the EoR window here.** Measured, not
+  assumed — `test_smoothness_does_not_confine_power_to_low_k_parallel` pins it
+  against the bare-ramp reference.
+
+- **A foreground-contaminated SNR flatters the result.** Foregrounds are
+  unbiased in the ensemble mean, but a single realisation carries a chance
+  cross-correlation of order $\sqrt{P_{21}P_{\rm gal}/N_{\rm modes}}$. On the
+  synthetic fixture the per-bin shift in $P_\times$ scales **linearly** with
+  foreground amplitude (×10 per decade) while the shift in $P_{21}$ scales
+  **quadratically** (×100) — exactly the contrast expected if the foreground
+  reaches the cross-spectrum only by chance. Because $|P_\times|/\sigma_\times$
+  then has a contaminated numerator *and* denominator, the total SNR degrades
+  far more slowly than $\sigma_\times$ alone: at $10^4\times$ contamination
+  $\sigma_\times$ rose 583× while the total SNR fell only 6.8×, and the
+  as-measured SNR sat at 15 % of the clean value where the surviving *signal*
+  was 0.16 %.
+
+  §7e.3 therefore plots a **signal-only** SNR (clean $P_\times$ against
+  contaminated $\sigma_\times$) beside the as-measured one; the shaded gap
+  between them is a spurious detection. An earlier draft of this section
+  claimed foregrounds "widen the error bar but do not move the measurement" —
+  true in the mean, wrong for a single realisation at high contamination, and
+  corrected throughout.
+
+### Note on `remove_foreground`
+
+It subtracts an exactly-correct template of the very field that was injected,
+scaled by `removal_fraction`. It is **not** GMCA, PCA, ICA, polynomial or
+log-polynomial fitting, Gaussian-process removal, or delay filtering, and has
+none of their failure modes — no signal loss from over-fitting, no
+mode-mixing, no leakage from the wedge into the window, no dependence on the
+foreground's smoothness. Results are statements about *removal level*, not
+about any named method's achievable performance. The docstring, the module
+header, the notebook markdown and `docs/reference.md` all say so explicitly,
+so it cannot be mistaken later for something more sophisticated.
+
+`removal_basis` resolves the amplitude/power ambiguity: the default
+`"amplitude"` scales the residual by $(1-f)$, so residual *power* falls as
+$(1-f)^2$; `"power"` scales it by $\sqrt{1-f}$.
+
 <!-- ─── Run manifests + crash mitigations, 2026-08-21 ───────────────────── -->
 
 ### Context — the 2026-08-20 SIGSEGV

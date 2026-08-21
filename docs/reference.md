@@ -202,6 +202,16 @@ Section numbers below match the notebook's own headers.
   `src.analysis.foreground_wedge_mask` reshaped onto §4's `KX/KY/KZ` grids.
   **97.4 % of the 3D modes fall inside the bare horizon wedge** at $z = 7$ on
   the fiducial $(128, 128, 175)$ grid
+- **7e** Foreground contamination and its removal — a synthetic diffuse
+  Galactic synchrotron foreground (plus point sources) injected into
+  `brightness_temp_field` before any spectrum is computed, then removed at
+  0/50/90/99/99.9/100 %. Each level goes through `compute_all_power_spectra`
+  and `compute_uncertainty_budget` unchanged. Three panels: $P_{21}$ showing
+  where the foreground sits and the removal working, $|P_\times|$ against
+  $\sigma_\times$, and total SNR versus removal fraction — plotted both as
+  measured and signal-only, since the as-measured curve has a contaminated
+  numerator. See `src/foregrounds.py` above; the removal step is a
+  placeholder, not an algorithm
 - **8** The uncertainty budget — photo-$z$ damping, wedge excision, noise and
   SNR in a single `compute_uncertainty_budget()` call
 - **9** Per-mode SNR map and total detection significance
@@ -651,6 +661,73 @@ reaches the power spectra or the stored HDF5.
 > downstream, but they carry no redshift evolution along the LOS and their LOS
 > cell size is `BOX_LEN / N_z`.
 
+### `src/foregrounds.py` — foreground injection and parametrised removal
+
+Adds a synthetic foreground to the simulated brightness-temperature lightcone
+before any power spectrum is computed, and removes a controllable fraction of
+it, so the notebook's §7e can measure the cost of contamination and of
+incomplete removal. Consumes the verified analysis chain; modifies none of it.
+
+| Function / class | Description |
+|---|---|
+| `simulate_diffuse_foreground(shape, k_perp, k_parallel, z_obs, **kw)` | Diffuse Galactic synchrotron cube [mK] on the lightcone grid |
+| `simulate_point_source_foreground(...)` | Poisson point-source component, angularly flatter than the diffuse one |
+| `inject_foreground(field, k_perp, k_parallel, z_obs, foreground_amplitude, ...)` | Combines both, scales to `foreground_amplitude × signal RMS`, returns a `ForegroundRealisation` |
+| `remove_foreground(contaminated, k_perp, k_parallel, removal_fraction, *, foreground, removal_basis)` | Placeholder removal knob — see the warning below |
+| `DIFFUSE_DEFAULTS`, `POINT_SOURCE_DEFAULTS` | Model parameters with their sources |
+
+**The model.** A power-law angular power spectrum $C_\ell \propto \ell^{-\beta}$
+with a smooth power-law spectrum
+$T(\theta,\nu) = T_{\rm ref}(\theta)(\nu/\nu_{\rm ref})^{-\alpha(\theta)}$,
+$\alpha$ varying across the sky. The reference sky is log-normal so the
+temperature is positive everywhere. The line-of-sight structure is *emergent*
+— it follows from the smooth frequency dependence rather than from an imposed
+$k_\parallel$ power law.
+
+| Parameter | Diffuse | Point source | Source |
+|---|---|---|---|
+| $\beta$ (angular) | 2.4 | 1.1 | Santos, Cooray & Knox (2005) Table 1 |
+| $\alpha$ (frequency) | 2.8 | 2.07 | Santos+2005; GSM |
+| $\sigma_\alpha$ | 0.1 | 0.3 | Shaw et al. (2014) |
+| $T_{\rm ref}$ at 130 MHz | 700 K | 57 K | de Oliveira-Costa+2008; Zheng+2017 (GSM2016) |
+
+> **`remove_foreground` is a placeholder, not a method.** It subtracts an
+> exactly-correct template of the very field that was injected, scaled by
+> `removal_fraction`. It is **not** GMCA, PCA, ICA, polynomial or
+> log-polynomial fitting, Gaussian-process removal, or delay filtering, and it
+> has none of their failure modes: no signal loss from over-fitting, no
+> mode-mixing, no leakage from the wedge into the window. Results are
+> statements about *removal level*, not about any named method's achievable
+> performance. `removal_basis` selects whether `removal_fraction` is a
+> fraction of the foreground amplitude (default; residual power falls as
+> $(1-f)^2$) or of its power.
+
+**Two findings the module documents and tests.**
+
+*Smoothness does not confine the contamination to low $k_\parallel$.*
+`compute_cylindrical_cross_power` takes a bare FFT with no line-of-sight
+taper, so a smooth-but-non-periodic spectrum is discontinuous at the box edge
+and leaks along the whole $k_\parallel$ axis as $\approx k_\parallel^{-1.5}$.
+That slope comes from the window, not the sky — a bare ramp with no angular
+structure leaks identically, and widening the band does not change it. Wedge
+excision alone therefore does not remove foreground power from the EoR window
+here.
+
+*A contaminated SNR flatters the result.* Foregrounds are unbiased in the
+ensemble mean, but a single realisation carries a chance cross-correlation of
+order $\sqrt{P_{21}P_{\rm gal}/N_{\rm modes}}$. Measured on the synthetic
+fixture, the per-bin shift in $P_\times$ scales **linearly** with foreground
+amplitude (×10 per decade) while the shift in $P_{21}$ scales
+**quadratically** (×100) — exactly the contrast expected if the foreground
+reaches the cross-spectrum only through a chance correlation. Because
+$|P_\times|/\sigma_\times$ then has a contaminated numerator *and*
+denominator, the total SNR degrades far more slowly than $\sigma_\times$
+alone: in one test $\sigma_\times$ rose 583× while the total SNR fell only
+6.8×. Evaluate the SNR with the clean $P_\times$ against the contaminated
+$\sigma_\times$ to separate the two; §7e.3 plots both.
+
+**Dependencies:** `numpy` only.
+
 ### `src/provenance.py` — run manifests and pre-flight costing
 
 Every simulation run writes one JSON manifest, `outputs/runs/sim_<run_id>.json`,
@@ -751,6 +828,7 @@ It also exposes two importable functions:
 | `hmf` | `run_simulation.py`, `notebooks/analysis.ipynb` |
 | `h5py` | `run_simulation.py`, `notebooks/plot_fields.ipynb`, `notebooks/analysis.ipynb` |
 | *(stdlib only)* | `src/provenance.py` |
+| `numpy` only | `src/foregrounds.py` |
 | `ipympl` | All notebooks — backs the `%matplotlib widget` interactive inline backend |
 
 The analytical notebook (`21cm_galaxy_cross_uncertainty.ipynb`) requires only `numpy` and `matplotlib`; all cosmological calculations use analytic fitting formulae (BBKS transfer function, Carroll et al. growth factor).
@@ -770,6 +848,7 @@ whole suite runs offline.
 | `test_analysis.py` | Cosmology helpers, the cylindrical power-spectrum estimator (shapes, symmetry, sign, and the analytic white-noise normalisation $P = \sigma^2 V_\mathrm{cell}$), wedge geometry, photo-$z$ kernel, thermal noise, SNR, Euclid selection, effective bias |
 | `test_dataio.py` | HDF5 loading, metadata accessors, halo subsampling, field/catalogue skipping, product-cache round trip and staleness detection |
 | `test_figures.py` | Headless backend, NaN filling, colormap, and that every one of the figure functions renders and writes a non-empty file |
+| `test_foregrounds.py` | Foreground shape/positivity, spectral smoothness and the leakage that survives it, the angular and frequency power laws, removal exactness at 0 % and 100 %, both removal bases, and end-to-end SNR degradation and recovery through the unmodified analysis chain |
 | `test_provenance.py` | Thread resolution from the environment (including malformed values), git/package capture, the volume-scaled cost estimate against both the reference run and the box that crashed, and that a manifest left mid-stage records the stage it died in |
 | `test_pipeline.py` | CLI parsing, each stage's `auto`/`force`/`skip` behaviour (with a stub simulation script), and end-to-end runs checking figures, cache reuse, and the summary JSON |
 | `test_galaxy_weighting.py` | The number- and luminosity-weighted `delta_gal` constructions: weight conservation, non-cubic grids, zero-mean normalisation, both formulas against manual recomputation, $\kappa_\mathrm{UV}$ scale-invariance, and the error paths |

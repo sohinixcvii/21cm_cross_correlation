@@ -454,3 +454,204 @@ def test_loading_a_missing_budget_raises(tmp_path, notebook_spectra) -> None:
         load_uncertainty_budget(path)
 
     assert os.path.exists(path)
+
+
+# ===========================================================================
+#  Physical thermal noise (Parsons 2017 Eq. 12 / La Plante Eq. 11)
+# ===========================================================================
+
+def test_x2y_scalar_matches_hand_calculation() -> None:
+    """
+    ``X²Y`` at z = 7 for Planck 2018.
+
+    X = D_c(7) ≈ 8821 Mpc and Y = c(1+z)²/[H(z) f_21] ≈ 1.58e-5 Mpc/Hz give
+    X²Y ≈ 1227 Mpc³ sr⁻¹ Hz⁻¹.  Pinned because every noise number scales
+    linearly with it.
+    """
+    assert analysis.cosmological_scalar_x2y(7.0) == pytest.approx(1227.0, rel=0.01)
+
+
+def test_beam_solid_angle_matches_the_hera_memo() -> None:
+    """
+    Ω_P ≈ 0.04 sr at 150 MHz for a 14 m dish.
+
+    Parsons (2017), "Power Spectrum Normalizations for HERA", plots the
+    CST-simulated HERA Ω_P against frequency; it reads ≈ 0.04 sr at 150 MHz.
+    Ω_eff = Ω_P × 2.175 from the same memo's printed Ω_P/Ω_PP.
+    """
+    # z such that the observed 21 cm frequency is 150 MHz.
+    z_150 = 1420.405e6 / 150e6 - 1.0
+    omega_p, omega_eff = analysis.hera_beam_solid_angles(z_150)
+
+    assert omega_p == pytest.approx(0.04, rel=0.15)
+    assert omega_eff == pytest.approx(omega_p * 2.175, rel=1e-9)
+
+
+def test_beam_solid_angle_scales_as_wavelength_squared() -> None:
+    """Ω_P = λ²/A_e for a fixed aperture — the antenna theorem."""
+    low, _ = analysis.hera_beam_solid_angles(6.0)
+    high, _ = analysis.hera_beam_solid_angles(9.0)
+
+    assert high / low == pytest.approx((10.0 / 7.0) ** 2, rel=1e-9)
+
+
+def test_baseline_counts_fall_with_k_perp() -> None:
+    """
+    A hexagonal core is far more redundant on short baselines.
+
+    That monotonic fall is what makes the physical noise rise with k_perp,
+    and it is the qualitative behaviour the flat estimate cannot reproduce.
+    """
+    k_perp = np.logspace(-2, -0.9, 8)
+    counts = analysis.hera_baseline_counts(k_perp, 7.0)
+
+    populated = counts[counts > 0]
+    assert populated.size >= 4
+    assert populated[0] > populated[-1]
+
+
+def test_baselines_run_out_beyond_the_longest_spacing() -> None:
+    """
+    HERA's core cannot measure arbitrarily high k_perp.
+
+    An 11-per-side hexagon at 14.6 m spans 2 × 10 × 14.6 = 292 m, which at
+    z = 7 (λ = 1.69 m, D_c = 8821 Mpc) is k_perp ≈ 0.12 Mpc⁻¹.  Beyond that
+    the count is zero and the noise is infinite — the mode is unmeasurable,
+    not merely noisy.
+    """
+    k_perp = np.logspace(-2, 0, 12)
+    counts = analysis.hera_baseline_counts(k_perp, 7.0)
+    noise = analysis.hera_thermal_noise_power_physical(k_perp, 7.0, 1000 * 3600)
+
+    assert counts[k_perp > 0.15].sum() == 0
+    assert np.all(np.isinf(noise[:, 0][k_perp > 0.15]))
+    assert np.all(np.isfinite(noise[:, 0][counts > 0]))
+
+
+def test_physical_noise_brackets_published_hera_sensitivity() -> None:
+    """
+    The physical model must land near published HERA forecasts.
+
+    A 1000 h HERA forecast of Δ²_N ~ 10 mK² at k = 0.2 corresponds to
+    P_N = 2π²Δ²/k³ ≈ 2.5e4 mK² Mpc³.  The implemented model should be within
+    an order of magnitude of that across the sampled bins — unlike the flat
+    scaling estimate, which is ~10⁴ below it.
+    """
+    k_perp = np.logspace(-2, -0.9, 8)
+    noise = analysis.hera_thermal_noise_power_physical(
+        k_perp, 7.0, 1000 * 3600
+    )[:, 0]
+    finite = noise[np.isfinite(noise)]
+
+    assert 1e3 < finite.min() < 2.5e4
+    assert finite.max() > 1e4
+
+    flat = analysis.hera_thermal_noise_power(7.0, 1000 * 3600, 8e6)
+    assert finite.min() / flat > 100.0
+
+
+def test_physical_noise_scales_inversely_with_integration_time() -> None:
+    """Doubling the integration halves the noise power."""
+    k_perp = np.logspace(-2, -1, 5)
+    short = analysis.hera_thermal_noise_power_physical(k_perp, 7.0, 1e6)
+    long = analysis.hera_thermal_noise_power_physical(k_perp, 7.0, 2e6)
+
+    finite = np.isfinite(short)
+    assert np.allclose(long[finite], 0.5 * short[finite])
+
+
+# ===========================================================================
+#  Mode weighting (La Plante Eqs. 18–19)
+# ===========================================================================
+
+def test_mode_counts_over_two_reproduces_la_plante_eq18(tiny_sim) -> None:
+    """
+    ``mode_counts / 2`` *is* La Plante's dN.
+
+    Eq. 18 gives dN = k_perp² k_par V (2π)⁻² dln k_perp dln k_par, the
+    continuum count of independent modes.  The FFT of a real field is
+    Hermitian, so half its cells are redundant and ``mode_counts / 2`` counts
+    the same thing.  This is the identification that licenses using the
+    estimator's own output as the Eq. 19 weight.
+    """
+    box_perp, box_los, n_bins = 256.0, 200.0, 20
+    field = np.random.default_rng(0).standard_normal((64, 64, 64))
+    k_perp, k_par, _, counts = analysis.compute_cylindrical_cross_power(
+        field, field, box_perp, box_los, n_bins, n_bins,
+    )
+
+    d_ln_perp = np.log(k_perp[1] / k_perp[0])
+    d_ln_par = np.log(k_par[1] / k_par[0])
+    grid_perp, grid_par = np.meshgrid(k_perp, k_par, indexing="ij")
+    dN = (
+        grid_perp ** 2 * grid_par * (box_perp ** 2 * box_los)
+        / (2 * np.pi) ** 2 * d_ln_perp * d_ln_par
+    )
+
+    well_sampled = counts > 20
+    ratio = (counts[well_sampled] / 2) / dN[well_sampled]
+    assert np.median(ratio) == pytest.approx(1.0, rel=0.15)
+
+
+def test_mode_weighting_is_off_by_default(notebook_spectra, tiny_sim) -> None:
+    """
+    The default must reproduce every number produced before it existed.
+
+    Every stored result, figure and summary in this repo predates the
+    weighting; turning it on by default would silently invalidate all of them.
+    """
+    default = analysis.compute_uncertainty_budget(spectra=notebook_spectra, z_obs=tiny_sim.z_obs)
+    explicit = analysis.compute_uncertainty_budget(
+        spectra=notebook_spectra, z_obs=tiny_sim.z_obs, mode_weighted=False,
+    )
+
+    assert default.mode_weighted is False
+    assert default.snr.mode_weight is None
+    assert default.total_snr == explicit.total_snr
+
+
+def test_mode_weighting_raises_the_total_snr(notebook_spectra, tiny_sim) -> None:
+    """Weighting by sqrt(dN) can only increase a quadrature sum of positives."""
+    plain = analysis.compute_uncertainty_budget(spectra=notebook_spectra, z_obs=tiny_sim.z_obs)
+    weighted = analysis.compute_uncertainty_budget(
+        spectra=notebook_spectra, z_obs=tiny_sim.z_obs, mode_weighted=True,
+    )
+
+    assert weighted.mode_weighted is True
+    assert weighted.snr.mode_weight is not None
+    assert weighted.total_snr >= plain.total_snr
+
+
+def test_mode_weighting_applies_sqrt_n_patch(notebook_spectra, tiny_sim) -> None:
+    """``N_patch`` enters Eq. 19 under the same square root as dN."""
+    one = analysis.compute_uncertainty_budget(
+        spectra=notebook_spectra, z_obs=tiny_sim.z_obs, mode_weighted=True, n_patch=1,
+    )
+    four = analysis.compute_uncertainty_budget(
+        spectra=notebook_spectra, z_obs=tiny_sim.z_obs, mode_weighted=True, n_patch=4,
+    )
+
+    assert four.total_snr == pytest.approx(2.0 * one.total_snr, rel=1e-9)
+
+
+def test_budget_records_which_models_it_used(notebook_spectra, tiny_sim) -> None:
+    """The summary must say which of the four combinations produced it."""
+    budget = analysis.compute_uncertainty_budget(
+        spectra=notebook_spectra, z_obs=tiny_sim.z_obs,
+        noise_model="physical", mode_weighted=True,
+    )
+    summary = budget.as_dict()
+
+    assert summary["noise_model"] == "physical"
+    assert summary["mode_weighted"] is True
+    # k_perp-resolved noise is reduced to its finite range for the JSON.
+    assert summary["P_noise_21cm"] <= summary["P_noise_21cm_max"]
+    assert np.isfinite(summary["P_noise_21cm_max"])
+
+
+def test_budget_rejects_an_unknown_noise_model(notebook_spectra, tiny_sim) -> None:
+    """A typo must not silently fall back to the historical estimate."""
+    with pytest.raises(ValueError, match="noise_model"):
+        analysis.compute_uncertainty_budget(
+            spectra=notebook_spectra, z_obs=tiny_sim.z_obs, noise_model="21cmsense",
+        )
