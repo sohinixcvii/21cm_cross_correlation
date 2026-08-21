@@ -31,6 +31,7 @@ References
     Euclid Collaboration (2022) — arXiv:2108.01201
 """
 
+import gc
 import os
 import sys
 import numpy as np
@@ -66,6 +67,12 @@ from src.conversions import (
     sfr_to_Luv,
     sheth_tormen_bias,
     survey_area_to_box_size,
+)
+from src.provenance import (
+    INT32_MAX,
+    RunManifest,
+    estimate_catalogue_cost,
+    resolve_n_threads,
 )
 
 # ── Check whether 21cmFAST is installed ──────────────────────────────────────
@@ -244,10 +251,37 @@ n_bins_perp     = 20
 n_bins_parallel = 20
 
 # ---------------------------------------------------------------------------
+#  Reproducibility
+# ---------------------------------------------------------------------------
+# 21cmFAST's initial-conditions seed.  Recorded in the run manifest and the
+# HDF5 attrs, because two runs are only comparable if this matches.
+RANDOM_SEED = 42
+
+# ---------------------------------------------------------------------------
+#  Compute resources
+# ---------------------------------------------------------------------------
+# 21cmFAST v4 defaults N_THREADS to 1 and nothing here used to override it, so
+# the 2026-08-20 run spent its entire 38 minutes on a single core (user/real =
+# 0.94 in outputs/21cm_pipeline_20260820_160108.log).  Resolution order:
+#
+#   N_THREADS env var  ->  SLURM_CPUS_PER_TASK  ->  os.cpu_count()  ->  1
+#
+# The SLURM variable is preferred over cpu_count() because on a shared node
+# cpu_count() reports the whole machine, not this job's allocation.
+
+N_THREADS = resolve_n_threads()
+
+# MINIMIZE_MEMORY trades peak RAM for extra intermediate I/O inside the C
+# backend.  Off by default in 21cmFAST; on here because the footprint-derived
+# box (DIM = 768) is memory-bound, not I/O-bound.  Set False to compare.
+MINIMIZE_MEMORY = True
+
+# ---------------------------------------------------------------------------
 #  Output path
 # ---------------------------------------------------------------------------
 OUTPUT_DIR  = "outputs"
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, "lightcone_data.h5")
+RUN_DIR     = os.path.join(OUTPUT_DIR, "runs")   # per-run parameter manifests
 
 # ===========================================================================
 #  End of configuration
@@ -318,6 +352,85 @@ print(f"LOS extent  : {L_los:.1f} Mpc  →  N_z = {N_z} slices")
 print(f"Box shape   : ({HII_DIM}, {HII_DIM}, {N_z})")
 print(f"Node redshifts: {n_nodes} nodes from z={z_max} to z={z_min}")
 print(f"Euclid      : M_UV < {M_UV_limit},  σ_z = {photoz_uncertainty}")
+print(f"Threads     : N_THREADS = {N_THREADS}  (of {os.cpu_count()} visible), "
+      f"MINIMIZE_MEMORY = {MINIMIZE_MEMORY}")
+
+# ── Pre-flight halo-catalogue cost ───────────────────────────────────────────
+# Extrapolated from the measured 256 Mpc run (see src/provenance.py).  The
+# catalogue scales with volume, so a modest-looking change in BOX_LEN is a
+# large change in memory: 256 -> 486.33 Mpc is 6.9x, which is what killed the
+# 2026-08-20 run with SIGSEGV.
+cost = estimate_catalogue_cost(BOX_LEN)
+print(f"Est. halos  : {cost['n_halos_lagrangian']:.3e} drawn "
+      f"({cost['n_halos_perturbed']:.3e} after perturbation) in "
+      f"{cost['volume_Mpc3']:.3e} Mpc³  →  {cost['catalogue_GB']:.1f} GB on disk, "
+      f"~{cost['resident_GB']:.1f} GB resident while perturbing")
+
+if cost["int32_headroom"] > 1.0:
+    print(
+        f"\n  *** WARNING: halo_coords would hold "
+        f"{cost['n_halos_lagrangian'] * 3:.3e} elements, "
+        f"{cost['int32_headroom']:.2f}x INT_MAX ({INT32_MAX:.3e}).\n"
+        f"      21cmFAST indexes halo arrays with int; this box may overflow\n"
+        f"      regardless of available memory.  Reduce BOX_LEN or raise\n"
+        f"      SAMPLER_MIN_MASS before committing cluster time. ***\n"
+    )
+elif cost["int32_headroom"] > 0.5:
+    print(f"  (halo_coords at {cost['int32_headroom']:.2f}x INT_MAX — "
+          f"over half the 32-bit index range)")
+
+# ── Run manifest ─────────────────────────────────────────────────────────────
+# Written now, before the expensive stages, and rewritten after every one of
+# them.  A run killed by a signal cannot flush stdout, but it leaves this file
+# behind with `status: running` and `stage` naming where it died.
+manifest = RunManifest.create(RUN_DIR, label="sim")
+manifest.record("parameters", {
+    "SURVEY_AREA_DEG2": SURVEY_AREA_DEG2,
+    "SURVEY_Z_CENTRAL": SURVEY_Z_CENTRAL,
+    "SURVEY_DELTA_Z": SURVEY_DELTA_Z,
+    "PHOTOZ_N_SIGMA": PHOTOZ_N_SIGMA,
+    "HII_DIM": HII_DIM,
+    "BOX_LEN": BOX_LEN,
+    "DIM": DIM,
+    "z_min": z_min,
+    "z_max": z_max,
+    "minimum_los_slices": minimum_los_slices,
+    "M_UV_limit": M_UV_limit,
+    "M_UV_bright": M_UV_bright,
+    "M_UV_faint": M_UV_faint,
+    "photoz_uncertainty": photoz_uncertainty,
+    "mean_galaxy_density": mean_galaxy_density,
+    "GALAXY_WEIGHTING": GALAXY_WEIGHTING,
+    "OMEGA_M_0": OMEGA_M_0,
+    "HUBBLE_CONSTANT": HUBBLE_CONSTANT,
+    "HERA_DISH_DIAMETER": HERA_DISH_DIAMETER,
+    "integration_time": integration_time,
+    "bandwidth": bandwidth,
+    "wedge_buffer": wedge_buffer,
+    "n_bins_perp": n_bins_perp,
+    "n_bins_parallel": n_bins_parallel,
+    "N_THREADS": N_THREADS,
+    "MINIMIZE_MEMORY": MINIMIZE_MEMORY,
+    "random_seed": RANDOM_SEED,
+    "has_21cmfast": HAS_21CMFAST,
+})
+manifest.record("derived", {
+    "cell_size_Mpc": cell_size,
+    "hires_cell_size_Mpc": hires_cell_size,
+    "M_cell_hires_Msun": M_cell_hires,
+    "M_cell_lores_Msun": M_cell_lores,
+    "L_los_Mpc": L_los,
+    "N_z": N_z,
+    "z_obs": z_obs,
+    "n_nodes": n_nodes,
+    "box_shape": [HII_DIM, HII_DIM, N_z],
+    "survey_z_min": SURVEY_Z_MIN,
+    "survey_z_max": SURVEY_Z_MAX,
+    "survey_los_depth_Mpc": SIM_BOX.los_depth,
+})
+manifest.record("cost_estimate", cost)
+manifest.record("outputs", {"lightcone_data": os.path.abspath(OUTPUT_FILE)})
+print(f"Run manifest: {manifest.path}")
 
 
 # ===========================================================================
@@ -334,21 +447,25 @@ print(f"Euclid      : M_UV < {M_UV_limit},  σ_z = {photoz_uncertainty}")
 if HAS_21CMFAST:
     print("\nRunning 21cmFAST lightcone simulation …")
     print(f"  z = {z_min} → {z_max},  N_z = {N_z} slices")
+    manifest.begin_stage("lightcone")
 
     inputs = p21c.InputParameters.from_template(
         ["simple"],
-        random_seed=42,
+        random_seed=RANDOM_SEED,
     )
 
     inputs = inputs.clone(
         node_redshifts=node_redshifts,
         simulation_options={
-            "HII_DIM": HII_DIM,
-            "BOX_LEN": BOX_LEN,
-            "DIM":     DIM,
+            "HII_DIM":   HII_DIM,
+            "BOX_LEN":   BOX_LEN,
+            "DIM":       DIM,
+            "N_THREADS": N_THREADS,
         },
         matter_options={
             "USE_INTERPOLATION_TABLES": "hmf-interpolation",
+            # Trades peak RAM for intermediate I/O in the C backend.
+            "MINIMIZE_MEMORY": MINIMIZE_MEMORY,
         },
     )
 
@@ -388,6 +505,17 @@ if HAS_21CMFAST:
     # Smallest halo the stochastic halo sampler populates — this sets the mass
     # resolution of the halo catalogue (and hence of the galaxy field).
     sampler_min_mass = float(inputs.simulation_options.SAMPLER_MIN_MASS)
+
+    manifest.record("results", {
+        "lightcone_shape": list(lightcone.shape),
+        "L_los_actual_Mpc": float(L_los),
+        "N_z_actual": int(N_z),
+        "mean_neutral_fraction": float(np.mean(neutral_fraction)),
+        "brightness_temp_min_mK": float(brightness_temp_field.min()),
+        "brightness_temp_max_mK": float(brightness_temp_field.max()),
+        "sampler_min_mass_Msun": sampler_min_mass,
+    })
+    print(f"  Lightcone stage done in {manifest.end_stage():.1f} s")
 
 else:
     # ==================================================================
@@ -444,6 +572,7 @@ else:
 
 if HAS_21CMFAST:
     print(f"\nExtracting halo catalogue at z = {z_obs} ...")
+    manifest.begin_stage("halo_catalog")
 
     # 1. Compute initial conditions using the same inputs as the lightcone
     initial_conditions = p21c.compute_initial_conditions(
@@ -463,6 +592,14 @@ if HAS_21CMFAST:
         initial_conditions=initial_conditions,
         halo_catalog=halo_catalog,
     )
+
+    # This is the memory high-water mark of the whole script: the Lagrangian
+    # catalogue and its perturbed copy are both resident, ~28 bytes per halo
+    # each, plus the DIM^3 initial conditions.  At BOX_LEN = 486.33 Mpc that
+    # is ~48 GB of catalogue on top of ~7.7 GB of ICs.  Nothing below reads
+    # either input again, so drop them before touching the arrays.
+    del halo_catalog, initial_conditions
+    gc.collect()
 
     # 4. Pull useful arrays (convert 21cmFAST Array objects to NumPy)
     #
@@ -494,6 +631,14 @@ if HAS_21CMFAST:
     if len(positive_sfr) > 0:
         print(f"  SFR min/max = {positive_sfr.min():.3e} - {positive_sfr.max():.3e} Msun/yr")
         print(f"  SFR median  = {np.median(positive_sfr):.3e} Msun/yr")
+
+    manifest.record("results", {
+        "n_halos": int(halo_coords.shape[0]),
+        "n_halos_sfr_positive": int(len(positive_sfr)),
+        "halo_mass_min_Msun": float(halo_masses.min()),
+        "halo_mass_max_Msun": float(halo_masses.max()),
+    })
+    print(f"  Halo-catalogue stage done in {manifest.end_stage():.1f} s")
 
 else:
     # Empty arrays when 21cmFAST is unavailable
@@ -819,6 +964,7 @@ galaxy_overdensity = galaxy_overdensity_rsd
 # notebooks (Parts 2 and 3). This avoids re-running the expensive simulation.
 
 print(f"\nSaving outputs to {OUTPUT_FILE} …")
+manifest.begin_stage("write_hdf5")
 
 with h5py.File(OUTPUT_FILE, "w") as f:
 
@@ -889,6 +1035,12 @@ with h5py.File(OUTPUT_FILE, "w") as f:
     f.attrs["wedge_buffer"]        = wedge_buffer
     f.attrs["n_bins_perp"]         = n_bins_perp
     f.attrs["n_bins_parallel"]     = n_bins_parallel
+    # ── Run provenance: ties this file to outputs/runs/sim_<run_id>.json ──
+    f.attrs["random_seed"]         = RANDOM_SEED
+    f.attrs["n_threads"]           = N_THREADS
+    f.attrs["minimize_memory"]     = MINIMIZE_MEMORY
+    f.attrs["run_id"]              = manifest.data["run_id"]
+    f.attrs["run_manifest"]        = manifest.path
 
 print("  Datasets saved:")
 print(f"    brightness_temp_field  : {brightness_temp_field.shape}")
@@ -902,7 +1054,25 @@ print(f"    halo_catalog/halo_coords    : {halo_coords.shape}")
 print(f"    halo_catalog/stellar_masses : {stellar_masses.shape}")
 print(f"    halo_catalog/sfr            : {sfr_cat.shape}")
 
+manifest.end_stage()
+
+# ── Close the run manifest ───────────────────────────────────────────────────
+manifest.record("results", {
+    "galaxy_bias": float(galaxy_bias),
+    "galaxy_bias_method": galaxy_bias_method,
+    "galaxy_bias_hmf_analytic": (
+        None if galaxy_bias_hmf is None else float(galaxy_bias_hmf)
+    ),
+    "beta_rsd": float(beta_rsd),
+    "sfr_timescale_yr": float(t_sf_yr),
+})
+manifest.record("outputs", {
+    "lightcone_data_GB": os.path.getsize(OUTPUT_FILE) / 1e9,
+})
+manifest.finish("complete")
+
 print(f"\nSimulation complete. Output written to: {OUTPUT_FILE}")
+print(f"Run manifest written to: {manifest.path}")
 print("Next steps:")
 print("  jupyter notebook notebooks/plot_fields.ipynb   # Part 2: field plots")
 print("  jupyter notebook notebooks/analysis.ipynb      # Part 3: power spectra & SNR")

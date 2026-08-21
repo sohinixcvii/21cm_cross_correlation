@@ -82,13 +82,23 @@ skips plotting entirely):
 | `fields` | `lightcone_fields`, `lightcone_slice` |
 | `halos` | `halo_catalogue`, `sfr_relations` |
 | `scaling` | `uv_luminosity_function`, `stellar_mass_muv`, `main_sequence`, `uv_selection_maps` |
+| `euclid` | `euclid_selected_catalogue`, `selected_galaxy_overdensity`, `galaxy_overdensity_on_21cm` |
 | `power` | `power_spectra_2d`, `galaxy_wedge`, `wedge_real_space` |
 | `snr` | `cross_snr` |
 | `budget` | `uncertainty_budget`, `photoz_suppression` |
 | `bias` | `galaxy_bias` |
 
-The `halos`, `scaling` and `bias` groups are skipped with a message when the
-stored HDF5 carries no halo catalogue or bias estimate.
+The `halos`, `scaling`, `euclid` and `bias` groups are skipped with a message
+when the stored HDF5 carries no halo catalogue or bias estimate.
+
+The `euclid` group is the post-selection view: the galaxies, halo masses and
+SFRs that survive the $M_\mathrm{UV}$ window, the galaxy overdensity field
+rebuilt from that selected catalogue alone, and that field overlaid on the
+21 cm field. It rebuilds $\delta_\mathrm{gal}$ rather than reading the stored
+one, because `run_simulation.py`'s default `GALAXY_WEIGHTING = "lightcone_sfr"`
+builds it from the lightcone `halo_sfr` field and applies no magnitude cut at
+all. Use `--galaxy-weighting luminosity` to weight the rebuild by
+$L_\mathrm{UV}$ instead of galaxy counts.
 
 **Paths and rendering:**
 
@@ -103,6 +113,7 @@ stored HDF5 carries no halo catalogue or bias estimate.
 | `--dpi N` | `200` | figure resolution |
 | `--max-halos N` | `0` (all) | cap on halos loaded, uniformly strided; number densities are rescaled automatically. Lower it when memory is tight |
 | `--m-uv-bright M` | `-22` | bright-end Euclid magnitude cut |
+| `--galaxy-weighting {number,luminosity}` | `number` | per-halo weight used to rebuild the post-cut $\delta_\mathrm{gal}$ for the `euclid` figure group |
 | `--quiet` | off | suppress progress output |
 
 **Uncertainty-budget overrides** — none of these touches the simulated fields,
@@ -149,6 +160,9 @@ changing any of them needs `--sim force` to take effect:
 | `M_UV_limit` / `M_UV_bright` | `-18` / `-22` | Euclid magnitude window |
 | `mean_galaxy_density` | `3e-3` | $\bar n_\mathrm{gal}$ [$h^3$ Mpc⁻³] |
 | `GALAXY_WEIGHTING` | `"lightcone_sfr"` | `lightcone_sfr` \| `number` \| `luminosity` — how $\delta_\mathrm{gal}$ is built |
+| `N_THREADS` | `N_THREADS` env → `SLURM_CPUS_PER_TASK` → `os.cpu_count()` | OpenMP threads for 21cmFAST. Its own default is **1**, which is why the 2026-08-20 run spent 38 minutes on a single core |
+| `MINIMIZE_MEMORY` | `True` | Trades peak RAM for intermediate I/O in the C backend |
+| `RANDOM_SEED` | `42` | 21cmFAST initial-conditions seed; recorded in the manifest and the HDF5 attrs |
 | `galaxy_bias` | `8` | fallback only; overwritten by the halo-catalogue estimate (≈ 4.7) |
 | `OMEGA_M_0`, `HUBBLE_CONSTANT` | `0.315`, `67.36` | Planck 2018 |
 | `HERA_DISH_DIAMETER` | `14.0` | m |
@@ -209,6 +223,14 @@ in step with it so both describe the same experiment:
 | `wedge_buffer` | `0.0677` | Mpc⁻¹ |
 | `n_bins_perp`, `n_bins_parallel` | `20`, `20` | $(k_\perp, k_\parallel)$ binning |
 
+**§3c and §5c — after the Euclid cut.** The lightcone notebook mirrors the
+`euclid` figure group: §3c plots the galaxies, halo masses and SFRs that
+survive the magnitude window, then rebuilds $\delta_\mathrm{gal}$ from that
+selected catalogue with `galaxy_overdensity_from_catalogue()`; §5c overlays
+that field on the 21 cm field and reports the cell-by-cell correlation
+coefficient. Set `GALAXY_WEIGHTING_DIAGNOSTIC` in the §3c.2 cell to switch
+between number- and $L_\mathrm{UV}$-weighting.
+
 Notebook figures use `%matplotlib widget`, which needs `ipywidgets >= 8` in the
 JupyterLab front-end environment as well as the kernel; see
 [`docs/reference.md`](docs/reference.md#figure-display-in-notebooks) if figures
@@ -220,8 +242,28 @@ come up blank.
 |------|----------|
 | `outputs/lightcone_data.h5` | Simulation fields, halo catalogue, and metadata (Part 1) |
 | `outputs/analysis_products.h5` | Cached $P_{21}$, $P_\mathrm{gal}$, $P_{21\times\mathrm{gal}}$ and the $k$-grid, plus the `uncertainty_budget` group (damped spectra, wedge mask, $\sigma$ terms, per-mode SNR) |
-| `outputs/figures/*.png` | The 15 figures listed in the figure-group table above |
-| `outputs/pipeline_summary.json` | Scalar results: $\langle x_\mathrm{HI}\rangle$, wedge slopes, $\sigma_r$, total SNR, $\langle b_g\rangle$, selection counts |
+| `outputs/figures/*.png` | The 18 figures listed in the figure-group table above |
+| `outputs/pipeline_summary.json` | Scalar results: $\langle x_\mathrm{HI}\rangle$, wedge slopes, $\sigma_r$, total SNR, $\langle b_g\rangle$, selection counts. Overwritten every run |
+| `outputs/runs/sim_<run_id>.json` | One manifest per simulation run: every configuration parameter, the derived geometry, the pre-flight cost estimate, code revision and package versions, per-stage timings, and peak memory. **Never overwritten** — see below |
+
+**Run manifests.** `run_simulation.py` writes
+`outputs/runs/sim_<run_id>.json` *before* it starts the expensive stages and
+rewrites it after each one. A run killed by a signal cannot flush stdout or
+run an exit hook, so the manifest is what survives: it is left with
+`"status": "running"` and `"stage"` naming where the run died. `submit_job.sh`
+summarises the newest manifest in its email, and the HDF5 records `run_id` /
+`run_manifest` attributes so a stored dataset names the run that produced it.
+
+Each simulation also prints a pre-flight halo-catalogue estimate before doing
+any work, extrapolated from the measured 256 Mpc run. The catalogue scales
+with comoving *volume*, so a modest-looking change in `BOX_LEN` is a large
+change in cost — and if the flattened `halo_coords` would exceed `INT_MAX`,
+the run says so and explains that more memory will not help:
+
+```
+Est. halos  : 9.370e+08 in 1.150e+08 Mpc³  →  26.2 GB on disk, ~52.5 GB resident
+  *** WARNING: halo_coords would hold 2.811e+09 elements, 1.31x INT_MAX ***
+```
 
 A full run on the fiducial $128^2 \times 100$ lightcone (114 M halos, 2.8 GB
 HDF5) takes ~35 s on a laptop when the simulation itself is skipped: ~1 s for

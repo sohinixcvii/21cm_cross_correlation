@@ -88,7 +88,11 @@ warnings.filterwarnings("ignore")
 #   snr      per-mode SNR and photo-z damped cross-power (Part 3)
 #   budget   uncertainty-budget breakdown: damping, sigma terms, wedge (Part 3)
 #   bias     Euclid-selected halo masses and b_h(M, z) (Part 3)
-PLOT_GROUPS = ("fields", "halos", "scaling", "power", "snr", "budget", "bias")
+#   euclid   post-Euclid-cut catalogue, galaxy overdensity, and its overlay
+#            on the 21 cm field (Part 2/3)
+PLOT_GROUPS = (
+    "fields", "halos", "scaling", "euclid", "power", "snr", "budget", "bias",
+)
 
 DEFAULT_DATA = os.path.join("outputs", "lightcone_data.h5")
 DEFAULT_PRODUCTS = os.path.join("outputs", "analysis_products.h5")
@@ -192,7 +196,11 @@ def run_simulation_stage(
     log(f"  Running {script} (this is the expensive stage) …", quiet)
     start = time.time()
 
-    result = subprocess.run([sys.executable, script], cwd=REPO_ROOT)
+    # -u on the child, always.  Its stdout is block-buffered when the
+    # pipeline's own output is redirected to a file, and a child killed by a
+    # signal never flushes — which is how the 2026-08-20 SIGSEGV produced a
+    # log with no indication of which stage had failed.
+    result = subprocess.run([sys.executable, "-u", script], cwd=REPO_ROOT)
 
     if result.returncode != 0:
         raise RuntimeError(
@@ -439,6 +447,7 @@ def figure_stage(
     fmt: str = "png",
     quiet: bool = False,
     m_uv_bright: float = -22.0,
+    galaxy_weighting: str = "number",
 ) -> List[str]:
     """
     Render and save the requested figure groups.
@@ -464,6 +473,9 @@ def figure_stage(
     m_uv_bright : float, optional
         Bright-end Euclid magnitude cut, passed to the selection-map figure so
         it selects identically to the bias stage.
+    galaxy_weighting : {'number', 'luminosity'}, optional
+        Per-halo weight used to rebuild the post-cut galaxy overdensity for
+        the ``euclid`` figure group.
 
     Returns
     -------
@@ -500,6 +512,27 @@ def figure_stage(
             ))
         else:
             log("  (no halo catalogue — skipping scaling-relation figures)", quiet)
+
+    if "euclid" in groups:
+        if has_catalog:
+            # The post-cut delta_gal is expensive to deposit for a large
+            # catalogue, so build it once and hand it to both figures.
+            delta_gal, selection = figures.selected_galaxy_overdensity(
+                data, M_UV_bright=m_uv_bright, weighting=galaxy_weighting,
+            )
+            emit("euclid_selected_catalogue", figures.plot_euclid_selected_catalogue(
+                data, M_UV_bright=m_uv_bright,
+            ))
+            emit("selected_galaxy_overdensity", figures.plot_selected_galaxy_overdensity(
+                data, weighting=galaxy_weighting,
+                delta_gal=delta_gal, selection=selection,
+            ))
+            emit("galaxy_overdensity_on_21cm", figures.plot_galaxy_overdensity_on_21cm(
+                data, weighting=galaxy_weighting,
+                delta_gal=delta_gal, selection=selection,
+            ))
+        else:
+            log("  (no halo catalogue — skipping Euclid-cut figures)", quiet)
 
     if "power" in groups:
         emit("power_spectra_2d", figures.plot_power_spectra(
@@ -617,6 +650,17 @@ def build_summary(
         # calculation applies them: damping -> wedge -> noise -> variance.
         "uncertainty_budget": budget.as_dict(),
         "figures": [os.path.abspath(p) for p in figure_paths],
+    }
+
+    # Point back at the simulation run that produced these fields.  This
+    # summary is overwritten every run; the manifest it names is not, so an
+    # analysis-only run can still say which simulation its numbers came from.
+    # Absent for HDF5 files written before run manifests existed.
+    summary["source_run"] = {
+        "run_id": data.attrs.get("run_id"),
+        "run_manifest": data.attrs.get("run_manifest"),
+        "random_seed": data.attrs.get("random_seed"),
+        "n_threads": data.attrs.get("n_threads"),
     }
 
     # Backwards-compatible alias: earlier summaries carried these five keys
@@ -788,6 +832,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--m-uv-bright", type=float, default=-22.0,
                         help="bright-end Euclid magnitude cut (default: -22)")
+    parser.add_argument(
+        "--galaxy-weighting", choices=analysis.GALAXY_WEIGHTING_MODES,
+        default="number",
+        help="per-halo weight used to rebuild the post-cut galaxy overdensity "
+             "for the 'euclid' figure group (default: number)",
+    )
 
     budget_group = parser.add_argument_group(
         "uncertainty budget",
@@ -862,7 +912,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     figures.apply_plot_style(dpi=args.dpi)
 
     # Catalogue-dependent work: halo/scaling/bias figures and the bias stage.
-    needs_catalog = bool({"halos", "scaling", "bias"} & set(plot_groups))
+    needs_catalog = bool({"halos", "scaling", "euclid", "bias"} & set(plot_groups))
 
     try:
         # ── Stage 1 ───────────────────────────────────────────────────────
@@ -926,6 +976,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 fmt=args.format,
                 quiet=quiet,
                 m_uv_bright=args.m_uv_bright,
+                galaxy_weighting=args.galaxy_weighting,
             )
         else:
             log("\n  Figures skipped (--plots none).", quiet)

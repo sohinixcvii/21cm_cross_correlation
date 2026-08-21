@@ -7,6 +7,184 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Run manifests + crash mitigations, 2026-08-21 ───────────────────── -->
+
+### Context — the 2026-08-20 SIGSEGV
+
+`run_pipeline.py --sim force` died after 2,303 s with `exit code -11`
+(SIGSEGV) and **no output at all** from the simulation child. Both facts are
+now addressed.
+
+The silence was buffering. `run_pipeline.py`'s `log()` uses
+`print(..., flush=True)`; `run_simulation.py` had no `flush=True` anywhere, so
+~8 KB of the child's progress output sat in a block buffer that the signal
+discarded. The crash destroyed its own diagnostics.
+
+The crash was scale. Commit `81e08ef` (2026-08-20 12:39, three hours earlier)
+replaced the hardcoded `HII_DIM = 128 / BOX_LEN = 256 / DIM = 384` with the
+footprint-derived `256 / 486.33 / 768`. Calibrated against the 2026-08-12 run
+and its 21cmFAST cache (136,663,818 halos in a 3.564 GiB `HaloCatalog.h5` —
+28.0 bytes/halo), that is 6.86× the volume: ~9.4 × 10⁸ halos, a 26.2 GB
+catalogue, 48–52 GB resident during `perturb_halo_catalog`, and a flattened
+`halo_coords` **1.31× past `INT_MAX`**. Of the 16 cached `HaloCatalog.h5`
+files in the tree exactly one is unreadable, and it is the one written at
+`BOX_LEN = 486.33` on a 512× smaller grid under no memory pressure — stopping
+dead at 2,147,491,839 bytes, the signed 32-bit boundary. Full analysis in
+[`docs/HPC.md`](docs/HPC.md) §13.5.
+
+### Added
+
+- **`src/provenance.py` — per-run parameter manifests.**
+  `run_simulation.py` now writes `outputs/runs/sim_<run_id>.json` **before**
+  the expensive stages and rewrites it after each one, so it survives a run
+  that never finishes. A process killed by a signal cannot flush stdout or run
+  an exit hook; the manifest is left with `"status": "running"` and `"stage"`
+  naming exactly where it died.
+
+  It records `parameters` (every configuration constant), `derived` (geometry,
+  mass resolution, LOS slicing), `cost_estimate`, `environment` (host, git
+  commit and dirty flag, package versions, SLURM job id), `timings_seconds`
+  per stage, `peak_memory_GB`, `results`, and `outputs`. Written via a
+  temporary file and `os.replace`, so a crash mid-write cannot leave
+  half-parsed JSON.
+
+- **A pre-flight halo-catalogue cost estimate** (`estimate_catalogue_cost()`),
+  printed and recorded before any compute is spent. The sampler's floor is a
+  fixed mass, not a grid property, so the catalogue scales with comoving
+  volume — meaning a modest-looking `BOX_LEN` change is a large cost change.
+  Past `INT_MAX` it warns explicitly that more memory will not help:
+
+  ```
+  Est. halos  : 9.370e+08 drawn (7.836e+08 after perturbation) in 1.150e+08 Mpc³
+                →  26.2 GB on disk, ~48.2 GB resident while perturbing
+    *** WARNING: halo_coords would hold 2.811e+09 elements, 1.31x INT_MAX ***
+  ```
+
+  It reports the Lagrangian and perturbed counts separately: the first sets
+  peak memory and index width, the second is what reaches the HDF5 and is
+  directly comparable to a run's `results.n_halos`. The 83.6 % ratio comes
+  from the 256 Mpc run and was reproduced by a held-out 64 Mpc run
+  (1,782,540 actual against 1,785,000 predicted).
+
+- **`RANDOM_SEED` as a named constant** (was a literal `42` inside the
+  `from_template` call), recorded in the manifest and the HDF5 attrs alongside
+  `n_threads`, `minimize_memory`, `run_id` and `run_manifest`.
+
+- **`source_run` in `pipeline_summary.json`** — `run_id`, `run_manifest`,
+  `random_seed` and `n_threads` read back from the HDF5, so an analysis-only
+  run names the simulation its numbers came from. `null` for files written
+  before manifests existed.
+
+- **`submit_job.sh` reports the newest manifest in its email**, including a
+  `DIED IN STAGE:` line when the run did not close it.
+
+### Changed
+
+- **`python -u` for the simulation child**, in `submit_job.sh` and in
+  `run_pipeline.py`'s `subprocess.run` call. The pipeline no longer depends on
+  how it was itself launched for its child's output to reach the log.
+
+- **`del halo_catalog, initial_conditions`** immediately after
+  `perturb_halo_catalog` returns. That call is the memory high-water mark of
+  the script — the Lagrangian catalogue and its perturbed copy are both
+  resident — and nothing below reads either input again. Frees ~26 GB of
+  catalogue and ~7.7 GB of ICs at the peak on the 486.33 Mpc box.
+
+- **`MINIMIZE_MEMORY = True`** in `matter_options`, trading peak RAM for
+  intermediate I/O in the C backend. It was `False` (21cmFAST's default) in
+  every run so far.
+
+- **`N_THREADS` is now set**, via `provenance.resolve_n_threads()`:
+  `N_THREADS` env → `SLURM_CPUS_PER_TASK` → `os.cpu_count()` → 1. The SLURM
+  variable is preferred over `cpu_count()` because on a shared node the latter
+  reports the whole machine rather than the job's allocation. 21cmFAST's own
+  default is 1, which is why the failed run showed `user/real = 0.94`. A
+  non-numeric environment value is ignored rather than raised, so a malformed
+  variable cannot abort a queued job.
+
+- **`.gitignore` covers all hash-named 21cmFAST cache directories**, not just
+  the one that existed when the rule was written. `a14661e5…/` — which holds
+  the corrupt 2 GiB `HaloCatalog.h5` — had been showing up as untracked.
+
+### Note
+
+None of this makes the 486.33 Mpc box fit. It makes the next attempt
+diagnosable and cheaper, and it says up front when a box cannot work. The
+suggested next step is a ~350 Mpc intermediate (2.5× volume, ~340 M halos,
+~9.5 GB catalogue, 0.48× `INT_MAX`) rather than the full footprint.
+
+<!-- ─── Post-Euclid-cut figures, 2026-08-20 ─────────────────────────────── -->
+
+### Added
+
+- **Three post-Euclid-cut figures**, in both front ends. Everything the
+  pipeline plotted about the galaxy population was either the *full* halo
+  catalogue or the stored `galaxy_overdensity`; neither is what the survey
+  sees. `uv_selection_maps` showed *where* the selected galaxies sit, but no
+  figure showed the selected population's own distributions, its overdensity
+  field, or that field against the 21 cm signal.
+
+  | Figure | `src/figures.py` | Panels |
+  |---|---|---|
+  | `euclid_selected_catalogue` | `plot_euclid_selected_catalogue` | selected galaxies on the sky coloured by $M_\mathrm{UV}$; halo mass before/after the cut; SFR before/after, with the equivalent SFR window marked |
+  | `selected_galaxy_overdensity` | `plot_selected_galaxy_overdensity` | LOS projection of $\delta_\mathrm{gal}$; a single transverse slice; the one-point distribution on a symlog axis |
+  | `galaxy_overdensity_on_21cm` | `plot_galaxy_overdensity_on_21cm` | $\delta_\mathrm{gal}$ contours over $\delta T_b$; the same maps with the roles swapped; $\langle\delta_\mathrm{gal}\rangle$ binned by $\delta T_b$, with the cell-by-cell Pearson $r$ |
+
+  These come with a new figure group, **`--plots euclid`** (catalogue-dependent,
+  skipped with a message when the HDF5 has no catalogue), and a new
+  **`--galaxy-weighting {number,luminosity}`** flag. Figure count 15 → 18.
+
+- **`figures.selected_galaxy_overdensity()`** — the shared rebuild behind those
+  last two figures. It calls `analysis.galaxy_overdensity_from_catalogue()` on
+  `run_simulation.py` §3b's grid (`n_perp = HII_DIM`, `n_los = N_z`,
+  `los_extent = BOX_LEN`, i.e. the *coeval* box, not `L_los`) and applies the
+  Euclid window.
+
+  **This is deliberately not the stored field.** The default
+  `GALAXY_WEIGHTING = "lightcone_sfr"` builds `galaxy_overdensity` from the
+  lightcone `halo_sfr` field, which applies **no magnitude cut at all** — so
+  plotting the stored field would not have been "after the Euclid cut" in any
+  run using the shipped default. `run_pipeline.py` deposits it once and hands
+  it to both figures rather than binning a 114 M-halo catalogue twice.
+
+- **Notebook §3c and §5c** in `21cmfast_HERAxEuclid_lightcone.ipynb`: §3c.1
+  plots the post-cut galaxies/halos/SFR, §3c.2 rebuilds and plots
+  $\delta_\mathrm{gal}$ (weighting switchable via
+  `GALAXY_WEIGHTING_DIAGNOSTIC`), and §5c overlays it on the 21 cm field. The
+  overlay lives in §5 rather than §3 because it needs `eor_cmap`, which §5b
+  defines. The cells import `select_euclid_halos` and
+  `galaxy_overdensity_from_catalogue` from `src.analysis` — the same calls the
+  batch figures make — so the two front ends cannot drift.
+
+### Notes on reading the new figures
+
+- **The selected sample is shot-noise dominated on the fiducial grid.** 49,315
+  of 114 M halos survive the cut: 0.03 galaxies per cell over
+  $128^2 \times 100$ cells, with ~97.5 % of cells empty. A single transverse
+  slice of $\delta_\mathrm{gal}$ is therefore almost pure noise, which is why
+  `plot_selected_galaxy_overdensity` leads with the LOS projection and
+  `plot_galaxy_overdensity_on_21cm` averages over `slab_cells = 8` LOS cells
+  and Gaussian-smooths the contoured field (`smooth_cells = 2`, display only).
+  The slice panel is kept because it is what the power-spectrum estimator is
+  actually handed.
+- **The overlays are transverse only.** The halo catalogue is a coeval snapshot
+  at $z_\mathrm{obs}$ and the 21 cm field is a lightcone, so the two share the
+  $(x, y)$ plane and the array shape but not an LOS scale — the same mismatch
+  `run_simulation.py` already accepts in catalogue mode. The third panel's
+  Pearson $r$ pairs cells exactly as `compute_all_power_spectra` does, so it is
+  the real-space counterpart of the cross-power sign, mismatch included. At the
+  fiducial parameters $r = -0.010$, and $\langle\delta_\mathrm{gal}\rangle$
+  falls from $+0.03$ at $\delta T_b \approx 0$ to $-0.14$ in the brightest
+  bin — galaxies avoid the neutral gas, as the negative large-scale
+  cross-power says.
+
+### Changed
+
+- **`figures.plot_uv_selection_maps`** now lifts its selection mask through the
+  new `_lift_selection_mask()` helper instead of inlining the
+  valid-subset-to-full-catalogue index lift. Same result; the logic is no
+  longer duplicated between two figures.
+
 <!-- ─── README streamlined + quickstart, 2026-08-20 ────────────────────── -->
 
 ### Added

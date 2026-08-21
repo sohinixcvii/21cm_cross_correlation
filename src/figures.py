@@ -33,17 +33,19 @@ matplotlib.use("Agg")   # headless-safe; must precede pyplot import
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 from matplotlib.figure import Figure
-from scipy.ndimage import generic_filter
+from scipy.ndimage import gaussian_filter, generic_filter
 
 try:  # local package import (repo root on sys.path)
     from src.analysis import (
         BiasEstimate,
+        EuclidSelection,
         SNRResult,
         UncertaintyBudget,
         deposit_halo_field,
         foreground_wedge_mask,
+        galaxy_overdensity_from_catalogue,
         photoz_damping_kernel,
         select_euclid_halos,
     )
@@ -52,10 +54,12 @@ try:  # local package import (repo root on sys.path)
 except ImportError:  # direct import of the module (src/ on sys.path)
     from analysis import (
         BiasEstimate,
+        EuclidSelection,
         SNRResult,
         UncertaintyBudget,
         deposit_halo_field,
         foreground_wedge_mask,
+        galaxy_overdensity_from_catalogue,
         photoz_damping_kernel,
         select_euclid_halos,
     )
@@ -75,6 +79,10 @@ __all__ = [
     "plot_stellar_mass_muv",
     "plot_main_sequence",
     "plot_uv_selection_maps",
+    "selected_galaxy_overdensity",
+    "plot_euclid_selected_catalogue",
+    "plot_selected_galaxy_overdensity",
+    "plot_galaxy_overdensity_on_21cm",
     "plot_power_spectra",
     "plot_galaxy_wedge",
     "plot_wedge_real_space",
@@ -911,9 +919,9 @@ def plot_uv_selection_maps(
 
     # selection.mask indexes the valid (SFR > 0) subset; lift it back to
     # full-catalogue indices to match `coords`.
-    valid = np.isfinite(sfr) & (sfr > 0) & (np.asarray(data.halo_masses, dtype=float) > 0)
-    selected_full = np.zeros(coords.shape[0], dtype=bool)
-    selected_full[np.flatnonzero(valid)[selection.mask]] = True
+    selected_full = _lift_selection_mask(
+        sfr, np.asarray(data.halo_masses, dtype=float), selection,
+    )
 
     counts_map = _project(selected_full, None)
 
@@ -951,6 +959,642 @@ def plot_uv_selection_maps(
     fig.suptitle(
         rf"Euclid selection — {selection.n_selected:,} of {selection.n_valid:,} halos "
         rf"at $z_{{\rm obs}} = {data.z_obs}$",
+        fontsize=13,
+    )
+    return fig
+
+
+def _lift_selection_mask(
+    sfr: np.ndarray,
+    halo_masses: np.ndarray,
+    selection: EuclidSelection,
+) -> np.ndarray:
+    """
+    Expand a Euclid selection mask to full-catalogue indices.
+
+    :func:`src.analysis.select_euclid_halos` masks *within* the valid
+    (``SFR > 0`` and ``M > 0``) subset, so its mask is shorter than the
+    catalogue and cannot index ``halo_coords`` directly.
+
+    Parameters
+    ----------
+    sfr : ndarray
+        Per-halo star-formation rate [M_sun yr^-1], full catalogue.
+    halo_masses : ndarray
+        Per-halo mass [M_sun], full catalogue.
+    selection : EuclidSelection
+        Selection returned for the same catalogue.
+
+    Returns
+    -------
+    ndarray of bool
+        Mask of shape ``(N_halos,)``, True for the selected halos.
+    """
+    sfr = np.asarray(sfr, dtype=float)
+    halo_masses = np.asarray(halo_masses, dtype=float)
+
+    valid = np.isfinite(sfr) & (sfr > 0) & (halo_masses > 0)
+    full_mask = np.zeros(sfr.shape[0], dtype=bool)
+    full_mask[np.flatnonzero(valid)[selection.mask]] = True
+    return full_mask
+
+
+def _display_contour_levels(
+    field: np.ndarray,
+    quantiles: Sequence[float] = (0.80, 0.90, 0.97),
+) -> np.ndarray:
+    """
+    Strictly increasing contour levels at quantiles of a 2D field.
+
+    Returns an empty array when the field is degenerate (all-NaN, or too
+    few distinct values to place a contour), which the callers treat as
+    "draw no contours" rather than an error.
+
+    Parameters
+    ----------
+    field : ndarray
+        2D array to take quantiles of.
+    quantiles : sequence of float, optional
+        Quantiles in ``[0, 1]``.
+
+    Returns
+    -------
+    ndarray
+        Sorted, unique, finite levels; possibly empty.
+    """
+    finite = field[np.isfinite(field)]
+    if finite.size == 0 or np.ptp(finite) <= 0:
+        return np.array([])
+    levels = np.unique(np.quantile(finite, quantiles))
+    return levels[np.isfinite(levels)]
+
+
+def selected_galaxy_overdensity(
+    data: SimulationData,
+    M_UV_bright: float = -22.0,
+    weighting: str = "number",
+) -> Tuple[np.ndarray, EuclidSelection]:
+    """
+    Galaxy overdensity field built from the Euclid-selected halo catalogue.
+
+    Thin wrapper over :func:`src.analysis.galaxy_overdensity_from_catalogue`
+    that pins the grid to the geometry ``run_simulation.py`` uses for its
+    catalogue-based ``galaxy_overdensity`` (§3b): ``HII_DIM`` transverse
+    cells over ``BOX_LEN`` and ``N_z`` cells over ``BOX_LEN`` along the
+    line of sight.  Computing it here — rather than reading the stored
+    field — is what makes these figures "after the Euclid cut" even when
+    the run used the default ``lightcone_sfr`` weighting, which applies no
+    magnitude cut at all.
+
+    Parameters
+    ----------
+    data : SimulationData
+        Loaded simulation with a non-empty halo catalogue.
+    M_UV_bright : float, optional
+        Bright-end magnitude cut.  The faint end comes from the stored
+        ``M_UV_limit`` attribute.
+    weighting : {'number', 'luminosity'}, optional
+        Per-halo weight, as in :func:`galaxy_overdensity_from_catalogue`.
+
+    Returns
+    -------
+    delta_gal : ndarray
+        Overdensity of shape ``(HII_DIM, HII_DIM, N_z)``.
+    selection : EuclidSelection
+        The magnitude window actually applied.
+
+    Notes
+    -----
+    The line-of-sight axis spans the *coeval* box (``BOX_LEN``), not the
+    lightcone extent ``L_los``: the halo catalogue is a coeval snapshot at
+    ``z_obs``, and ``run_simulation.py`` makes the same choice
+    (``los_extent=BOX_LEN``).  The two arrays therefore share a shape and a
+    transverse plane but not an LOS scale — see ``PIPELINE.md``.
+
+    When the catalogue was subsampled at load time (``--max-halos``), the
+    field is the overdensity of that subsample: unbiased, but noisier per
+    cell than the full catalogue.
+    """
+    M_UV_faint = float(data.get("M_UV_limit", -18.0))
+
+    return galaxy_overdensity_from_catalogue(
+        coords=_halo_coords_mpc(data),
+        sfr=np.asarray(data.sfr, dtype=float),
+        halo_masses=np.asarray(data.halo_masses, dtype=float),
+        box_len=data.BOX_LEN,
+        n_perp=data.HII_DIM,
+        n_los=data.N_z,
+        los_extent=data.BOX_LEN,
+        weighting=weighting,
+        M_UV_faint=M_UV_faint,
+        M_UV_bright=M_UV_bright,
+    )
+
+
+def plot_euclid_selected_catalogue(
+    data: SimulationData,
+    M_UV_bright: float = -22.0,
+    max_points: int = 50_000,
+    seed: int = 42,
+) -> Figure:
+    """
+    Galaxies, halo masses, and SFRs that survive the Euclid magnitude cut.
+
+    The post-selection counterpart of :func:`plot_halo_catalogue` and
+    :func:`plot_sfr_relations`, which show the full catalogue.  Three
+    panels — the selected galaxies projected on the sky and coloured by
+    ``M_UV``, the halo-mass distribution before and after the cut, and the
+    SFR distribution before and after it with the equivalent SFR window
+    marked.
+
+    Parameters
+    ----------
+    data : SimulationData
+        Loaded simulation with a non-empty halo catalogue.
+    M_UV_bright : float, optional
+        Bright-end magnitude cut.  The faint end comes from the stored
+        ``M_UV_limit`` attribute.
+    max_points : int, optional
+        Cap on the number of galaxies scattered in the first panel.
+    seed : int, optional
+        RNG seed for the subsampling.
+
+    Returns
+    -------
+    Figure
+        The assembled 1 x 3 figure.
+    """
+    rng = np.random.default_rng(seed)
+
+    M_UV_faint = float(data.get("M_UV_limit", -18.0))
+    coords = _halo_coords_mpc(data)
+    sfr = np.asarray(data.sfr, dtype=float)
+    halo_masses = np.asarray(data.halo_masses, dtype=float)
+
+    # The same call the bias stage and plot_uv_selection_maps make, so all
+    # three figures describe one selection.
+    selection = select_euclid_halos(
+        sfr, halo_masses, M_UV_faint=M_UV_faint, M_UV_bright=M_UV_bright,
+    )
+    selected = _lift_selection_mask(sfr, halo_masses, selection)
+
+    fig, axes = plt.subplots(1, 3, figsize=(19, 5.5))
+
+    # -- Panel 1: the selected galaxies on the sky ------------------------
+    selected_idx = np.flatnonzero(selected)
+    if selected_idx.size > max_points:
+        selected_idx = rng.choice(selected_idx, size=max_points, replace=False)
+
+    if selected_idx.size:
+        magnitude = sfr_to_Muv(sfr[selected_idx])
+        scatter = axes[0].scatter(
+            coords[selected_idx, 0], coords[selected_idx, 1],
+            s=np.clip((np.log10(halo_masses[selected_idx]) - 7.0) ** 2, 1, 30),
+            c=magnitude,
+            cmap="plasma_r",
+            alpha=0.6,
+            edgecolors="none",
+        )
+        colorbar = fig.colorbar(scatter, ax=axes[0], label=r"$M_{\rm UV}$")
+        colorbar.ax.invert_yaxis()          # brighter (more negative) on top
+    axes[0].set_xlabel("$x$  [Mpc]")
+    axes[0].set_ylabel("$y$  [Mpc]")
+    axes[0].set_xlim(0, data.BOX_LEN)
+    axes[0].set_ylim(0, data.BOX_LEN)
+    axes[0].set_aspect("equal")
+    axes[0].set_title("Selected galaxies — projected positions")
+
+    # -- Panel 2: halo mass, before and after the cut ---------------------
+    all_masses = halo_masses[halo_masses > 0]
+    mass_bins = np.linspace(
+        np.log10(all_masses.min()), np.log10(all_masses.max()), 60,
+    ) if all_masses.size else np.linspace(8.0, 12.0, 60)
+
+    if all_masses.size:
+        axes[1].hist(np.log10(all_masses), bins=mass_bins,
+                     color="0.75", label="All halos")
+    if selection.n_selected:
+        axes[1].hist(np.log10(selection.halo_masses), bins=mass_bins,
+                     color="crimson", alpha=0.8, label="Euclid-selected")
+    axes[1].set_yscale("log")
+    axes[1].set_xlabel(r"$\log_{10}(M_{\rm halo}/M_\odot)$")
+    axes[1].set_ylabel("Number of halos")
+    axes[1].legend(fontsize=9)
+    axes[1].set_title("Halo mass — before and after the cut")
+
+    # -- Panel 3: SFR, before and after the cut ---------------------------
+    all_sfr = sfr[np.isfinite(sfr) & (sfr > 0)]
+    sfr_bins = np.linspace(
+        np.log10(all_sfr.min()), np.log10(all_sfr.max()), 80,
+    ) if all_sfr.size else np.linspace(-4.0, 2.0, 80)
+
+    if all_sfr.size:
+        axes[2].hist(np.log10(all_sfr), bins=sfr_bins,
+                     color="0.75", label="All halos")
+    if selection.n_selected:
+        axes[2].hist(np.log10(selection.sfr), bins=sfr_bins,
+                     color="crimson", alpha=0.8, label="Euclid-selected")
+
+    # The magnitude window is a pure SFR window under the Madau & Dickinson
+    # calibration, so the cut lands on exactly these two SFR values.
+    for bound, colour, label in (
+        (selection.SFR_min, "darkorange", r"$M_{\rm UV}$ faint cut"),
+        (selection.SFR_max, "navy", r"$M_{\rm UV}$ bright cut"),
+    ):
+        if bound > 0:
+            axes[2].axvline(np.log10(bound), color=colour, ls="--", lw=1.5,
+                            label=label)
+    axes[2].set_yscale("log")
+    axes[2].set_xlabel(r"$\log_{10}(\mathrm{SFR}/M_\odot\,\mathrm{yr}^{-1})$")
+    axes[2].set_ylabel("Number of halos")
+    axes[2].legend(fontsize=9)
+    axes[2].set_title("SFR — before and after the cut")
+
+    selected_fraction = (
+        selection.n_selected / selection.n_valid if selection.n_valid else 0.0
+    )
+    fig.suptitle(
+        rf"After the Euclid cut (${M_UV_bright} \leq M_{{\rm UV}} \leq {M_UV_faint}$) — "
+        rf"{selection.n_selected:,} of {selection.n_valid:,} halos "
+        rf"({selected_fraction:.2%}) at $z_{{\rm obs}} = {data.z_obs}$",
+        fontsize=13,
+    )
+    return fig
+
+
+def _overdensity_norm(field: np.ndarray) -> TwoSlopeNorm:
+    """
+    Diverging norm for an overdensity: floor at -1, long positive tail.
+
+    ``delta_gal`` is bounded below by -1 (an empty cell) but unbounded
+    above, so a symmetric scale saturates the whole map as soon as the
+    catalogue is sparse.  Anchoring the midpoint at ``delta = 0`` and the
+    top at a high percentile of the *occupied* cells keeps both the voids
+    and the peaks readable.
+
+    Parameters
+    ----------
+    field : ndarray
+        Overdensity values.
+
+    Returns
+    -------
+    TwoSlopeNorm
+        Norm spanning ``[-1, vmax]`` with ``vcenter = 0``.
+    """
+    positive = field[field > 0]
+    vmax = float(np.percentile(positive, 99)) if positive.size else 1.0
+    return TwoSlopeNorm(vmin=-1.0, vcenter=0.0, vmax=max(vmax, 1e-3))
+
+
+def _binned_mean_by(
+    x: np.ndarray,
+    y: np.ndarray,
+    n_bins: int = 25,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Mean of ``y`` in equal-count bins of ``x``, with the standard error.
+
+    Quantile edges rather than uniform ones, because ``delta T_b`` piles up
+    at zero in the ionised cells; duplicate edges are collapsed, so a
+    strongly degenerate field simply yields fewer bins.
+
+    Parameters
+    ----------
+    x : ndarray
+        Values to bin by.
+    y : ndarray
+        Values to average, same shape as ``x``.
+    n_bins : int, optional
+        Requested number of bins; the result may have fewer.
+
+    Returns
+    -------
+    centres : ndarray
+        Mean ``x`` per bin.
+    means : ndarray
+        Mean ``y`` per bin.
+    errors : ndarray
+        Standard error on ``means``.
+    """
+    edges = np.unique(np.quantile(x, np.linspace(0.0, 1.0, n_bins + 1)))
+    if edges.size < 3:
+        return (
+            np.array([x.mean()]),
+            np.array([y.mean()]),
+            np.array([y.std() / max(np.sqrt(y.size), 1.0)]),
+        )
+
+    index = np.clip(np.digitize(x, edges[1:-1]), 0, edges.size - 2)
+    counts = np.bincount(index, minlength=edges.size - 1).astype(float)
+    occupied = counts > 0
+
+    sum_x = np.bincount(index, weights=x, minlength=edges.size - 1)
+    sum_y = np.bincount(index, weights=y, minlength=edges.size - 1)
+    sum_yy = np.bincount(index, weights=y ** 2, minlength=edges.size - 1)
+
+    counts = counts[occupied]
+    centres = sum_x[occupied] / counts
+    means = sum_y[occupied] / counts
+    variance = np.maximum(sum_yy[occupied] / counts - means ** 2, 0.0)
+    return centres, means, np.sqrt(variance / counts)
+
+
+def _slab_mean(field: np.ndarray, centre: int, slab_cells: int) -> np.ndarray:
+    """
+    Mean of a 3D field over a window of line-of-sight cells.
+
+    Parameters
+    ----------
+    field : ndarray
+        Array of shape ``(n_x, n_y, n_los)``.
+    centre : int
+        Central LOS index.
+    slab_cells : int
+        Window width in cells; clipped to the array and to at least 1.
+
+    Returns
+    -------
+    ndarray
+        2D array of shape ``(n_x, n_y)``.
+    """
+    half = max(int(slab_cells), 1) // 2
+    lo = max(centre - half, 0)
+    hi = min(centre + max(int(slab_cells), 1) - half, field.shape[2])
+    return field[:, :, lo:hi].mean(axis=2)
+
+
+def plot_selected_galaxy_overdensity(
+    data: SimulationData,
+    M_UV_bright: float = -22.0,
+    weighting: str = "number",
+    delta_gal: Optional[np.ndarray] = None,
+    selection: Optional[EuclidSelection] = None,
+) -> Figure:
+    """
+    The galaxy overdensity field built from the Euclid-selected catalogue.
+
+    Three panels — the line-of-sight projection of ``delta_gal``, a single
+    transverse slice at mid-LOS, and the one-point distribution over every
+    cell.
+
+    The projection comes first because the selected sample is sparse: the
+    Euclid window keeps a small fraction of the catalogue, so a single
+    ``(HII_DIM, HII_DIM)`` slice holds far fewer galaxies than it has cells
+    and is shot noise almost everywhere.  The projection is the same field
+    integrated along the LOS, where the clustering is actually visible; the
+    slice panel shows the raw, unprojected field the power-spectrum
+    estimator is handed.
+
+    Parameters
+    ----------
+    data : SimulationData
+        Loaded simulation with a non-empty halo catalogue.
+    M_UV_bright : float, optional
+        Bright-end magnitude cut, used only when ``delta_gal`` is not given.
+    weighting : {'number', 'luminosity'}, optional
+        Per-halo weight, used only when ``delta_gal`` is not given.
+    delta_gal : ndarray, optional
+        Pre-computed field from :func:`selected_galaxy_overdensity`.  Pass it
+        to avoid re-depositing a large catalogue for a second figure.
+    selection : EuclidSelection, optional
+        The selection that produced ``delta_gal``; required for the title
+        when ``delta_gal`` is supplied.
+
+    Returns
+    -------
+    Figure
+        The assembled 1 x 3 figure.
+
+    Notes
+    -----
+    The LOS axis spans the coeval box (``BOX_LEN``), not the lightcone
+    ``L_los`` — see :func:`selected_galaxy_overdensity`.
+    """
+    if delta_gal is None or selection is None:
+        delta_gal, selection = selected_galaxy_overdensity(
+            data, M_UV_bright=M_UV_bright, weighting=weighting,
+        )
+
+    mid_z = delta_gal.shape[2] // 2
+    projected = delta_gal.mean(axis=2)
+    transverse = delta_gal[:, :, mid_z]
+
+    extent_xy = [0, data.BOX_LEN, 0, data.BOX_LEN]
+
+    fig, axes = plt.subplots(1, 3, figsize=(19, 5.5))
+
+    im0 = axes[0].imshow(
+        projected.T, origin="lower", extent=extent_xy,
+        cmap="RdBu_r", norm=_overdensity_norm(projected),
+        interpolation="nearest",
+    )
+    fig.colorbar(im0, ax=axes[0], label=r"$\langle \delta_{\rm gal} \rangle_{\rm LOS}$")
+    axes[0].set_title("LOS projection of the whole box")
+
+    im1 = axes[1].imshow(
+        transverse.T, origin="lower", extent=extent_xy,
+        cmap="RdBu_r", norm=_overdensity_norm(delta_gal),
+        interpolation="nearest",
+    )
+    fig.colorbar(im1, ax=axes[1], label=r"$\delta_{\rm gal}$")
+    axes[1].set_title(f"Single transverse slice (LOS cell {mid_z})")
+
+    for ax in axes[:2]:
+        ax.set_xlabel("$x$  [Mpc]")
+        ax.set_ylabel("$y$  [Mpc]")
+        ax.set_aspect("equal")
+
+    # -- Panel 3: the one-point distribution ------------------------------
+    # A sparse count field piles up at delta = -1 and has a tail thousands
+    # of times wider, so the axis has to be symlog to show both.
+    flat = delta_gal.ravel()
+    n_cells = flat.size
+    empty_fraction = float(np.mean(flat <= -1.0 + 1e-12))
+    occupancy = selection.n_selected / n_cells if n_cells else 0.0
+
+    span = max(float(np.max(np.abs(flat))), 1.0)
+    positive_bins = np.logspace(0, np.log10(span), 40)
+    bins = np.concatenate(([-1.0], np.linspace(-1.0, 1.0, 21)[1:], positive_bins[1:]))
+
+    axes[2].hist(flat, bins=np.unique(bins), color="steelblue", alpha=0.85)
+    axes[2].axvline(0.0, color="k", ls="--", lw=1.2, label=r"$\delta_{\rm gal} = 0$")
+    axes[2].set_xscale("symlog", linthresh=1.0)
+    axes[2].set_yscale("log")
+    axes[2].set_xlabel(r"$\delta_{\rm gal}$")
+    axes[2].set_ylabel("Number of cells")
+    axes[2].legend(fontsize=9)
+    axes[2].set_title(
+        f"One-point distribution\n"
+        f"empty cells {empty_fraction:.1%},  "
+        f"mean occupancy {occupancy:.3g} galaxies/cell"
+    )
+
+    fig.suptitle(
+        rf"Galaxy overdensity after the Euclid cut "
+        rf"(${selection.M_UV_bright} \leq M_{{\rm UV}} \leq {selection.M_UV_faint}$, "
+        rf"{weighting}-weighted) — {selection.n_selected:,} galaxies on a "
+        rf"{delta_gal.shape[0]}$\times${delta_gal.shape[1]}$\times${delta_gal.shape[2]} grid",
+        fontsize=13,
+    )
+    return fig
+
+
+def plot_galaxy_overdensity_on_21cm(
+    data: SimulationData,
+    M_UV_bright: float = -22.0,
+    weighting: str = "number",
+    slab_cells: int = 8,
+    smooth_cells: float = 2.0,
+    delta_gal: Optional[np.ndarray] = None,
+    selection: Optional[EuclidSelection] = None,
+) -> Figure:
+    """
+    The post-cut galaxy overdensity overlaid on the 21 cm field.
+
+    Three panels — the 21 cm brightness temperature with ``delta_gal``
+    contours on top, the same view with the two roles swapped, and the
+    cell-by-cell joint distribution of the two fields with their Pearson
+    correlation coefficient.
+
+    Both maps are the mean over the *same* window of line-of-sight cells, so
+    the two fields are paired exactly as ``compute_all_power_spectra`` pairs
+    them; the sign of ``r`` in the third panel is therefore the real-space
+    counterpart of the large-scale cross-power.  Averaging over a slab
+    rather than a single cell is what makes the sparse selected sample
+    legible at all.
+
+    The overlays are transverse only: the halo catalogue is a coeval
+    snapshot and the 21 cm field is a lightcone, so the two share the
+    ``(x, y)`` plane and the grid, but not a line-of-sight scale — see
+    :func:`selected_galaxy_overdensity` and ``PIPELINE.md``.
+
+    Parameters
+    ----------
+    data : SimulationData
+        Loaded simulation with a non-empty halo catalogue.
+    M_UV_bright : float, optional
+        Bright-end magnitude cut, used only when ``delta_gal`` is not given.
+    weighting : {'number', 'luminosity'}, optional
+        Per-halo weight, used only when ``delta_gal`` is not given.
+    slab_cells : int, optional
+        Line-of-sight cells averaged into each map, centred on mid-LOS.
+    smooth_cells : float, optional
+        Gaussian smoothing width, in cells, applied to the contoured field.
+        Display only — the shot noise of a sparse selected catalogue makes
+        raw per-cell contours unreadable.  ``0`` disables it.
+    delta_gal : ndarray, optional
+        Pre-computed field from :func:`selected_galaxy_overdensity`.
+    selection : EuclidSelection, optional
+        The selection that produced ``delta_gal``.
+
+    Returns
+    -------
+    Figure
+        The assembled 1 x 3 figure.
+    """
+    if delta_gal is None or selection is None:
+        delta_gal, selection = selected_galaxy_overdensity(
+            data, M_UV_bright=M_UV_bright, weighting=weighting,
+        )
+
+    temperature = np.asarray(data.brightness_temp_field, dtype=float)
+    n_los = min(delta_gal.shape[2], temperature.shape[2])
+    mid_z = n_los // 2
+
+    delta_map = _slab_mean(delta_gal, mid_z, slab_cells)
+    temp_map = _slab_mean(temperature, mid_z, slab_cells)
+
+    def _smooth(field: np.ndarray) -> np.ndarray:
+        return gaussian_filter(field, smooth_cells) if smooth_cells > 0 else field
+
+    delta_smooth = _smooth(delta_map)
+    temp_smooth = _smooth(temp_map)
+
+    extent_xy = [0, data.BOX_LEN, 0, data.BOX_LEN]
+    grid_x = np.linspace(0, data.BOX_LEN, delta_map.shape[0])
+    grid_y = np.linspace(0, data.BOX_LEN, delta_map.shape[1])
+
+    vmax_t = float(np.percentile(temp_map, 99.5))
+
+    fig, axes = plt.subplots(1, 3, figsize=(19, 5.5))
+
+    # -- Panel 1: delta_gal contours over the 21 cm field -----------------
+    im0 = axes[0].imshow(
+        temp_map.T, origin="lower", extent=extent_xy,
+        cmap=eor_colormap(), vmin=0.0, vmax=max(vmax_t, 1e-3),
+        interpolation="nearest",
+    )
+    fig.colorbar(im0, ax=axes[0], label=r"$\delta T_b$  [mK]")
+
+    gal_levels = _display_contour_levels(delta_smooth)
+    if gal_levels.size:
+        contour = axes[0].contour(
+            grid_x, grid_y, delta_smooth.T, levels=gal_levels,
+            colors="crimson", linewidths=1.0, alpha=0.9,
+        )
+        axes[0].clabel(contour, fmt=lambda v: f"{v:.2f}", fontsize=7)
+    axes[0].set_title(r"$\delta_{\rm gal}$ contours over $\delta T_b$")
+
+    # -- Panel 2: the same maps, roles swapped ----------------------------
+    im1 = axes[1].imshow(
+        delta_map.T, origin="lower", extent=extent_xy,
+        cmap="RdBu_r", norm=_overdensity_norm(delta_map),
+        interpolation="nearest",
+    )
+    fig.colorbar(im1, ax=axes[1], label=r"$\delta_{\rm gal}$")
+
+    temp_levels = _display_contour_levels(temp_smooth)
+    if temp_levels.size:
+        contour = axes[1].contour(
+            grid_x, grid_y, temp_smooth.T, levels=temp_levels,
+            colors="k", linewidths=1.0, alpha=0.8,
+        )
+        axes[1].clabel(contour, fmt=lambda v: f"{v:.0f}", fontsize=7)
+    axes[1].set_title(r"$\delta T_b$ contours over $\delta_{\rm gal}$")
+
+    for ax in axes[:2]:
+        ax.set_xlabel("$x$  [Mpc]")
+        ax.set_ylabel("$y$  [Mpc]")
+        ax.set_aspect("equal")
+
+    # -- Panel 3: the cell-by-cell relation over every cell ---------------
+    # A 2D histogram is unreadable here: delta_gal is a sparse count field,
+    # so it is quantised and ~97% of cells sit at -1.  Binning delta_gal by
+    # delta T_b instead averages that shot noise away and leaves the trend
+    # the cross-power measures.
+    gal_flat = delta_gal[:, :, :n_los].ravel()
+    temp_flat = temperature[:, :, :n_los].ravel()
+
+    finite = np.isfinite(gal_flat) & np.isfinite(temp_flat)
+    gal_flat, temp_flat = gal_flat[finite], temp_flat[finite]
+
+    usable = (
+        gal_flat.size > 0
+        and np.ptp(gal_flat) > 0
+        and np.ptp(temp_flat) > 0
+    )
+    if usable:
+        centres, means, errors = _binned_mean_by(temp_flat, gal_flat)
+        axes[2].errorbar(centres, means, yerr=errors, fmt="o-", ms=4, lw=1.2,
+                         color="crimson", ecolor="0.5", capsize=2)
+        pearson_r = float(np.corrcoef(temp_flat, gal_flat)[0, 1])
+        correlation_label = rf"$r = {pearson_r:+.3f}$"
+    else:
+        correlation_label = "degenerate field"
+    axes[2].axhline(0.0, color="k", ls="--", lw=1.0)
+    axes[2].set_xlabel(r"$\delta T_b$  [mK]")
+    axes[2].set_ylabel(r"$\langle \delta_{\rm gal} \rangle$")
+    axes[2].set_title(
+        rf"Mean $\delta_{{\rm gal}}$ per $\delta T_b$ bin  ({correlation_label})"
+    )
+
+    fig.suptitle(
+        rf"Euclid-selected galaxies against the 21 cm field at "
+        rf"$z_{{\rm obs}} = {data.z_obs}$  "
+        rf"(${selection.M_UV_bright} \leq M_{{\rm UV}} \leq {selection.M_UV_faint}$, "
+        rf"{selection.n_selected:,} galaxies; maps are the mean over "
+        rf"{slab_cells} LOS cells at cell {mid_z})",
         fontsize=13,
     )
     return fig

@@ -53,9 +53,22 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 
 conda activate "$CONDA_ENV"
 
+# ── Thread allocation ─────────────────────────────────────────────────────────
+# run_simulation.py resolves N_THREADS -> SLURM_CPUS_PER_TASK -> os.cpu_count().
+# Exported here so the same value reaches 21cmFAST and any OpenMP library the
+# stack pulls in, and so it lands in the log and the run manifest.
+export N_THREADS="${N_THREADS:-${SLURM_CPUS_PER_TASK:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}}"
+export OMP_NUM_THREADS="$N_THREADS"
+echo "Threads: N_THREADS=${N_THREADS}" | tee -a "$LOG_FILE"
+
 # ── Run the pipeline and collect CPU usage ────────────────────────────────────
 # All arguments given to this script are forwarded to the Python script.
-/usr/bin/time -p python "$PYTHON_SCRIPT" "$@" >> "$LOG_FILE" 2>&1
+#
+# -u is not optional.  Python block-buffers stdout when it is redirected to a
+# file, and a process killed by a signal never flushes that buffer.  The
+# 2026-08-20 SIGSEGV destroyed ~8 KB of unflushed progress output, leaving a
+# log that could not say which stage had failed.
+/usr/bin/time -p python -u "$PYTHON_SCRIPT" "$@" >> "$LOG_FILE" 2>&1
 
 EXIT_CODE=$?
 
@@ -95,6 +108,35 @@ else
     FIGURE_LIST="(no figures written)"
 fi
 
+# ── Newest run manifest (survives a crash; stdout does not) ───────────────────
+LATEST_MANIFEST=$(ls -1t outputs/runs/sim_*.json 2>/dev/null | head -1)
+if [ -n "$LATEST_MANIFEST" ]; then
+    MANIFEST_REPORT=$(python -u - "$LATEST_MANIFEST" <<'PYEOF'
+import json, sys
+
+with open(sys.argv[1]) as stream:
+    m = json.load(stream)
+
+print(f"Manifest:      {sys.argv[1]}")
+print(f"Run status:    {m.get('status')}")
+if m.get("status") == "running":
+    print(f"DIED IN STAGE: {m.get('stage')}   <-- crashed here")
+print(f"Stages done:   {', '.join(m.get('stages_completed') or []) or '(none)'}")
+print(f"Peak memory:   {m.get('peak_memory_GB', '?')} GB")
+p = m.get("parameters", {})
+print(f"Box:           BOX_LEN={p.get('BOX_LEN')} HII_DIM={p.get('HII_DIM')} "
+      f"DIM={p.get('DIM')} N_THREADS={p.get('N_THREADS')}")
+c = m.get("cost_estimate", {})
+if c:
+    print(f"Est. halos:    {c.get('n_halos_lagrangian', 0):.3e}  "
+          f"({c.get('catalogue_GB', 0):.1f} GB, "
+          f"{c.get('int32_headroom', 0):.2f}x INT_MAX)")
+PYEOF
+)
+else
+    MANIFEST_REPORT="(no run manifest found in outputs/runs/)"
+fi
+
 # ── Email body ────────────────────────────────────────────────────────────────
 EMAIL_BODY=$(cat <<EOF
 Job name:      ${JOB_NAME}
@@ -110,6 +152,10 @@ Command:       python ${PYTHON_SCRIPT} $*
 Log file:      ${LOG_FILE}
 Summary file:  ${SUMMARY_FILE}
 Exit code:     ${EXIT_CODE}
+
+Run manifest:
+------------------------------------------------------------
+${MANIFEST_REPORT}
 
 Figures written (${FIGURE_COUNT}) in ${FIGURE_DIR}:
 ------------------------------------------------------------

@@ -2,8 +2,10 @@
 __pycache__/
 *.pyc
 
-# 21cmFAST simulation cache (hash-named cache dirs written to project root)
-d1f8b93ecb5e05f9040e32ca2a1534a2/
+# 21cmFAST simulation cache (hash-named cache dirs written to project root).
+# One 32-hex-character directory per unique InputParameters set; they hold
+# multi-GB InitialConditions/HaloCatalog files and are regenerable.
+[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/
 
 # Generated simulation outputs
 outputs/

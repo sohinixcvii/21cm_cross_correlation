@@ -112,7 +112,7 @@ What it does, in order:
 |---|---|---|
 | `--sim` | `auto` | `auto` = run `run_simulation.py` only if the HDF5 is missing; `force` = always; `skip` = never (errors if absent) |
 | `--analysis` | `auto` | `auto` = recompute spectra only if the cache is missing or older than the simulation; `force` = always; `skip` = require the cache |
-| `--plots` | `all` | any of `all none fields halos scaling power snr budget bias` |
+| `--plots` | `all` | any of `all none fields halos scaling euclid power snr budget bias` |
 | `--data` | `outputs/lightcone_data.h5` | simulation HDF5 |
 | `--products` | `outputs/analysis_products.h5` | power-spectrum cache |
 | `--figdir` | `outputs/figures` | figure directory |
@@ -584,12 +584,40 @@ $\lceil\log_{10}M_\mathrm{max}\rceil + 0.5$ in $M_\odot/h$
 | `fields` | `lightcone_fields`, `lightcone_slice` | no |
 | `halos` | `halo_catalogue`, `sfr_relations` | yes |
 | `scaling` | `uv_luminosity_function`, `stellar_mass_muv`, `main_sequence`, `uv_selection_maps` | yes |
+| `euclid` | `euclid_selected_catalogue`, `selected_galaxy_overdensity`, `galaxy_overdensity_on_21cm` | yes |
 | `power` | `power_spectra_2d`, `galaxy_wedge`, `wedge_real_space` | no |
 | `snr` | `cross_snr` | no |
 | `budget` | `uncertainty_budget`, `photoz_suppression` | no |
 | `bias` | `galaxy_bias` | yes |
 
-**15 figures total.** Literature overlays hardcoded in the figure code:
+**18 figures total.**
+
+The `euclid` group does not read the stored `galaxy_overdensity`. It rebuilds
+the field with `analysis.galaxy_overdensity_from_catalogue()` on
+`run_simulation.py` §3b's grid (`n_perp = HII_DIM`, `n_los = N_z`,
+`los_extent = BOX_LEN` — the *coeval* box, not `L_los`), applying the Euclid
+window, because the stored field is written under the default
+`GALAXY_WEIGHTING = "lightcone_sfr"` and carries no magnitude cut at all. The
+per-halo weight is `--galaxy-weighting` (`number` by default, or `luminosity`).
+The deposit is done once per run and shared by both overdensity figures.
+
+Two consequences worth knowing before reading these plots:
+
+- **The selected sample is shot-noise dominated on this grid.** At the
+  fiducial parameters 49,315 of 114 M halos survive the cut, i.e. 0.03
+  galaxies per cell over $128^2\times100$ cells; ~97.5 % of cells are empty
+  and a single transverse slice is almost pure noise. Hence the LOS
+  projection panel, the slab averaging in the overlay
+  (`slab_cells = 8`), and the display-only Gaussian smoothing of the
+  contoured field (`smooth_cells = 2`).
+- **The overlays are transverse only.** The catalogue is coeval and the 21 cm
+  field is a lightcone, so the two share the $(x, y)$ plane and the array
+  shape but not an LOS scale — the same mismatch `run_simulation.py` already
+  accepts in catalogue mode (§11 and `PIPELINE.md`). The third panel's Pearson
+  $r$ pairs cells exactly as `compute_all_power_spectra` does, so it is the
+  real-space counterpart of the cross-power sign, mismatch included.
+
+Literature overlays hardcoded in the figure code:
 
 | Figure | Overlay | Parameters |
 |---|---|---|
@@ -1047,6 +1075,7 @@ Full table in §3.1. The four that matter for an HPC run:
 | `--max-halos` | `0` (all) | The catalogue is 2.74 GB on disk and loads in full. Set this if the node's memory is tight; densities are rescaled by `halo_sampling_factor`. |
 | `--plots` | `all` | `--plots power snr` skips the catalogue read entirely; `--plots none` gives numbers only. |
 | `--m-uv-bright` | −22.0 | The analysis-stage bright cut. Keep it equal to `M_UV_bright` at `run_simulation.py:492`. |
+| `--galaxy-weighting` | `number` | Only affects the `euclid` figure group's rebuilt δ_gal. It does **not** change the stored field or any power spectrum. |
 
 ### 13.4 Which edits actually take effect, and when
 
@@ -1058,9 +1087,67 @@ parameters **from the HDF5 root attributes written by Stage 1**, not from
 |---|---|---|
 | **A — read from HDF5 attrs** (fallback used only if the attribute is absent) | `n_bins_perp`, `n_bins_parallel`, `HUBBLE_CONSTANT`, `OMEGA_M_0`, `SPEED_OF_LIGHT_KMS`, `SPEED_OF_LIGHT_MPS`, `photoz_uncertainty`, `HERA_DISH_DIAMETER`, `F_21_HZ`, `wedge_buffer`, `integration_time`, `bandwidth`, `mean_galaxy_density`, `M_UV_limit` | …has **no effect** until the file is rewritten (`--sim force`) or the attribute is patched in place. See §11.7 for the patch route and its provenance record. Fallbacks are at `run_pipeline.py:264–339`. |
 | **B — baked into the stored field** | `galaxy_bias`, `beta_rsd` (the Kaiser boost is applied to `galaxy_overdensity` before writing), and all geometry (`HII_DIM`, `BOX_LEN`, `z_min`, `z_max`, `minimum_los_slices`, seed, template) | …requires a **full re-simulation**. Patching these attributes makes the file internally inconsistent — do not. |
-| **C — live** | `--m-uv-bright`, `--plots`, `--format`, `--dpi`, `--max-halos`, `--data/--products/--figdir/--summary` | …takes effect on the next `run_pipeline.py` invocation, ~1.6 s from cached spectra. |
+| **C — live** | `--m-uv-bright`, `--galaxy-weighting`, `--plots`, `--format`, `--dpi`, `--max-halos`, `--data/--products/--figdir/--summary` | …takes effect on the next `run_pipeline.py` invocation, ~1.6 s from cached spectra. |
 
-### 13.5 Consistency rules the code does not enforce
+### 13.5 Run manifests and the 2026-08-20 SIGSEGV
+
+`run_simulation.py` writes `outputs/runs/sim_<run_id>.json` before it starts
+the lightcone and rewrites it after every stage (`src/provenance.py`). It is
+the only record that survives a run killed by a signal, because such a run
+cannot flush stdout or run an exit hook.
+
+**What the 2026-08-20 failure looked like, and why it was undiagnosable.**
+`run_pipeline.py --sim force` reported `exit code -11` (SIGSEGV) after 2,303 s
+with no output at all from the child. The cause of the *silence* was
+buffering: `run_pipeline.py`'s own `log()` uses `print(..., flush=True)`, while
+`run_simulation.py` had no `flush=True` anywhere, so ~8 KB of the child's
+progress output sat in a block buffer that the signal discarded. Both the
+`python -u` in `submit_job.sh` and the `-u` in the pipeline's `subprocess.run`
+call exist for this.
+
+**What the failure was.** Commit `81e08ef` (2026-08-20 12:39) replaced the
+hardcoded `HII_DIM = 128 / BOX_LEN = 256 / DIM = 384` with the
+footprint-derived `256 / 486.33 / 768`. Measured against the 2026-08-12 run
+and its 21cmFAST cache (136,663,818 halos in a 3.564 GiB `HaloCatalog.h5`,
+i.e. 28.0 bytes/halo):
+
+| | 256 Mpc (2026-08-12, OK) | 486.33 Mpc (2026-08-20, SIGSEGV) |
+|---|---|---|
+| Comoving volume | 1.68 × 10⁷ Mpc³ | 1.15 × 10⁸ Mpc³ (6.86×) |
+| Lagrangian halos | 136,663,818 | ~9.37 × 10⁸ |
+| Catalogue on disk | 3.83 GB | 26.2 GB |
+| Both catalogues resident | 7.0 GB | 48–52 GB |
+| IC file (`DIM` 384 → 768) | 0.96 GB | 7.7 GB |
+| `halo_coords` vs `INT_MAX` | 0.19× | **1.31×** |
+
+Two mechanisms are consistent with SIGSEGV rather than SIGKILL: an unchecked
+`malloc` returning NULL in the C backend, or a 32-bit index overflow. The
+evidence favours the latter. Of the 16 cached `HaloCatalog.h5` files in the
+working tree, exactly one is unreadable — and it is the one written at
+`BOX_LEN = 486.33` with `HII_DIM = 32, DIM = 96`, a grid 512× smaller and
+under no memory pressure at all. Its size is 2,147,491,839 bytes: the signed
+32-bit boundary. **If it is the overflow, a larger node will not fix it** —
+the catalogue has to shrink.
+
+Hence `estimate_catalogue_cost()` and the pre-flight warning: the estimate is
+volume-scaled from the measured run and is printed, and recorded in the
+manifest, before any compute is spent.
+
+**Mitigations now in place**
+
+| Change | Where | Effect |
+|---|---|---|
+| `python -u` on the child | `submit_job.sh`, `run_pipeline.py:199` | The next failure names its stage |
+| Run manifest | `src/provenance.py`, `run_simulation.py` | Parameters and stage-reached survive a crash |
+| `del halo_catalog, initial_conditions` | `run_simulation.py`, after `perturb_halo_catalog` | Drops ~26 GB of catalogue and ~7.7 GB of ICs at the high-water mark |
+| `MINIMIZE_MEMORY = True` | `matter_options` | Trades peak RAM for intermediate I/O |
+| `N_THREADS` resolution | `provenance.resolve_n_threads()` | 21cmFAST's default is 1; the failed run used one core for 38 minutes |
+| Pre-flight cost estimate | `estimate_catalogue_cost()` | Warns past `INT_MAX` before any compute is spent |
+
+None of these makes the 486.33 Mpc box fit. They make the next attempt
+diagnosable and cheaper, and they say up front when a box cannot work.
+
+### 13.6 Consistency rules the code does not enforce
 
 Nothing checks these; violating one produces a plausible-looking wrong number.
 
@@ -1078,7 +1165,7 @@ Nothing checks these; violating one produces a plausible-looking wrong number.
 8. Requesting more than one core in R1 does nothing unless `N_THREADS` is also
    set (§13.2).
 
-### 13.6 Pre-flight checklist
+### 13.7 Pre-flight checklist
 
 ```text
 [ ] R1  #SBATCH directives added to submit_job.sh
@@ -1090,7 +1177,14 @@ Nothing checks these; violating one produces a plausible-looking wrong number.
 [ ] Group A/B edit  =>  launched with `--sim force`, not the default `auto`
 [ ] M_UV_bright (line 492) == --m-uv-bright
 [ ] seed / template change recorded in CHANGELOG.md
+[ ] --- if BOX_LEN changed (§13.5) ---
+[ ] Pre-flight estimate printed no INT_MAX warning
+[ ] Node RAM >= the manifest's cost_estimate.resident_GB, plus the IC file
+[ ] N_THREADS set (its own default is 1)
 ```
+
+After any failed run, read `outputs/runs/sim_<run_id>.json` first: `status`
+and `stage` name where it died even when the log does not.
 
 ---
 

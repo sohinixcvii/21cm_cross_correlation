@@ -413,3 +413,111 @@ def test_plot_uv_selection_maps_handles_zero_sfr_halos(
     counts = fig.axes[1].images[0].get_array()
     assert int(np.nansum(counts)) == selection.n_selected
     assert_saves(fig, tmp_path, "uv_selection_maps_zero_sfr")
+
+
+# ===========================================================================
+#  Post-Euclid-cut figures
+# ===========================================================================
+
+@pytest.fixture(scope="module")
+def selected_field(tiny_sim: SimulationData):
+    """Post-cut galaxy overdensity and the selection that produced it."""
+    return figures.selected_galaxy_overdensity(tiny_sim, M_UV_bright=-22.0)
+
+
+def test_selected_galaxy_overdensity_geometry(
+    tiny_sim: SimulationData, selected_field
+) -> None:
+    """The rebuilt field matches run_simulation.py's catalogue-field grid."""
+    delta_gal, selection = selected_field
+
+    assert delta_gal.shape == (tiny_sim.HII_DIM, tiny_sim.HII_DIM, tiny_sim.N_z)
+    assert delta_gal.min() >= -1.0 - 1e-9          # delta = N/<N> - 1
+    assert np.isclose(delta_gal.mean(), 0.0, atol=1e-9)
+
+    # It must apply the same window as the bias stage, not the stored field.
+    expected = analysis.select_euclid_halos(
+        tiny_sim.sfr, tiny_sim.halo_masses,
+        M_UV_faint=tiny_sim.get("M_UV_limit", -18.0), M_UV_bright=-22.0,
+    )
+    assert selection.n_selected == expected.n_selected
+    assert 0 < selection.n_selected < selection.n_valid
+
+
+def test_plot_euclid_selected_catalogue(tiny_sim: SimulationData, tmp_path) -> None:
+    """Galaxies, halo masses, and SFRs after the cut render and save."""
+    fig = figures.plot_euclid_selected_catalogue(tiny_sim, M_UV_bright=-22.0)
+    assert_saves(fig, tmp_path, "euclid_selected_catalogue")
+
+    selection = analysis.select_euclid_halos(
+        tiny_sim.sfr, tiny_sim.halo_masses,
+        M_UV_faint=tiny_sim.get("M_UV_limit", -18.0), M_UV_bright=-22.0,
+    )
+    assert f"{selection.n_selected:,}" in fig._suptitle.get_text()
+
+    # Panel 3 marks the SFR window equivalent to the magnitude cut.
+    sfr_cuts = sorted(line.get_xdata()[0] for line in fig.axes[2].lines)
+    assert np.allclose(
+        sfr_cuts, sorted(np.log10([selection.SFR_min, selection.SFR_max])),
+    )
+
+
+def test_plot_selected_galaxy_overdensity(
+    tiny_sim: SimulationData, selected_field, tmp_path
+) -> None:
+    """The post-cut overdensity figure renders both slices and the PDF."""
+    delta_gal, selection = selected_field
+    fig = figures.plot_selected_galaxy_overdensity(
+        tiny_sim, delta_gal=delta_gal, selection=selection,
+    )
+    assert_saves(fig, tmp_path, "selected_galaxy_overdensity")
+
+    assert len(fig.axes[0].images) == 1 and len(fig.axes[1].images) == 1
+    assert f"{selection.n_selected:,}" in fig._suptitle.get_text()
+
+
+def test_plot_galaxy_overdensity_on_21cm(
+    tiny_sim: SimulationData, selected_field, tmp_path
+) -> None:
+    """The overlay renders contours over the 21 cm slice and reports r."""
+    delta_gal, selection = selected_field
+    fig = figures.plot_galaxy_overdensity_on_21cm(
+        tiny_sim, delta_gal=delta_gal, selection=selection,
+    )
+    assert_saves(fig, tmp_path, "galaxy_overdensity_on_21cm")
+
+    # Panel 1: 21 cm image with galaxy contours on top; panel 2 is the swap.
+    assert len(fig.axes[0].images) == 1
+    assert fig.axes[0].collections            # the contour set
+    assert len(fig.axes[1].images) == 1
+    assert fig.axes[1].collections
+    assert "$r = " in fig.axes[2].get_title()
+
+
+def test_overlay_survives_empty_selection(tiny_sim: SimulationData, tmp_path) -> None:
+    """
+    An empty selection gives an all-zero field, not a crash.
+
+    ``galaxy_overdensity_from_catalogue`` returns zeros when nothing passes
+    the cut, which leaves both the contour levels and the Pearson r
+    degenerate; the figures must fall back rather than raise.
+    """
+    # Bright end fainter than the faint end: the window is empty by
+    # construction, whatever the catalogue contains.
+    delta_gal, selection = figures.selected_galaxy_overdensity(
+        tiny_sim, M_UV_bright=-17.0,
+    )
+    assert selection.n_selected == 0
+    assert np.all(delta_gal == 0.0)
+
+    assert_saves(
+        figures.plot_selected_galaxy_overdensity(
+            tiny_sim, delta_gal=delta_gal, selection=selection,
+        ),
+        tmp_path, "selected_galaxy_overdensity_empty",
+    )
+    fig = figures.plot_galaxy_overdensity_on_21cm(
+        tiny_sim, delta_gal=delta_gal, selection=selection,
+    )
+    assert "degenerate field" in fig.axes[2].get_title()
+    assert_saves(fig, tmp_path, "galaxy_overdensity_on_21cm_empty")

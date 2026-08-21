@@ -27,6 +27,7 @@ flowchart TD
     end
 
     D7 --> K[("outputs/lightcone_data.h5\nfields + halo catalogue + attrs")]
+    D1 -.written before stage 2, updated after each.-> M1[("outputs/runs/sim_<run_id>.json\nparameters, cost estimate,\nstage reached, timings")]
 
     K --> L["src/dataio.load_simulation\n(optional --max-halos subsampling)"]
 
@@ -43,11 +44,13 @@ flowchart TD
         P --> R["power_spectra_2d, galaxy_wedge,\nwedge_real_space, cross_snr,\nuncertainty_budget, photoz_suppression"]
         Q --> T["galaxy_bias"]
         L --> U["lightcone_fields, lightcone_slice,\nhalo_catalogue, sfr_relations,\nuv_luminosity_function,\nstellar_mass_muv, main_sequence,\nuv_selection_maps"]
+        L --> Z["euclid_selected_catalogue,\nselected_galaxy_overdensity,\ngalaxy_overdensity_on_21cm\n(post-Euclid-cut δ_gal, rebuilt)"]
     end
 
     R --> V[("outputs/figures/*.png")]
     T --> V
     U --> V
+    Z --> V
 
     P --> W[("outputs/pipeline_summary.json\n⟨x_HI⟩, wedge slopes, σ_r,\ntotal SNR, ⟨b_g⟩")]
     Q --> W
@@ -70,9 +73,9 @@ flowchart TD
 | # | Stage | Where it runs | Input | Output |
 |---|-------|----------------|-------|--------|
 | 0 | `submit_job.sh` — shell launcher: activates `21cmfast`, times the run, forwards its arguments to `run_pipeline.py`, emails a report via `sendmail` | HPC login/compute node | CLI arguments | `outputs/<job>_<timestamp>.log` |
-| 1 | `run_simulation.py` — 21cmFASTv4 lightcone, halo catalogue, galaxy field, bias estimate, Kaiser RSD. Invoked as a subprocess when `--sim` says so | HPC compute node (headless, `matplotlib.use("Agg")`) | Config block at top of script | `outputs/lightcone_data.h5` |
+| 1 | `run_simulation.py` — 21cmFASTv4 lightcone, halo catalogue, galaxy field, bias estimate, Kaiser RSD. Invoked as a subprocess (always with `python -u`) when `--sim` says so | HPC compute node (headless, `matplotlib.use("Agg")`) | Config block at top of script | `outputs/lightcone_data.h5`, `outputs/runs/sim_<run_id>.json` |
 | 2 | `src/analysis.py` — cylindrical power spectra, then `compute_uncertainty_budget` (photo-$z$ damping, wedge excision, HERA noise, variance, SNR), Euclid selection, effective bias | Anywhere | `lightcone_data.h5` | `outputs/analysis_products.h5` |
-| 3 | `src/figures.py` — all 15 figures, `Agg` backend | Anywhere | Loaded data + spectra | `outputs/figures/*.png` |
+| 3 | `src/figures.py` — all 18 figures, `Agg` backend | Anywhere | Loaded data + spectra | `outputs/figures/*.png` |
 | 4 | `run_pipeline.py` summary | Anywhere | All of the above | `outputs/pipeline_summary.json` + console report |
 | — | `notebooks/plot_fields.ipynb`, `notebooks/analysis.ipynb` | Local machine or interactive HPC Jupyter session | `lightcone_data.h5` | Inline figures (same content, interactive) |
 
@@ -107,6 +110,7 @@ bash submit_job.sh                    # analyse stored results and re-plot
 # Useful variants
 python run_pipeline.py --analysis force        # recompute the power spectra
 python run_pipeline.py --plots power snr       # only the k-space figures
+python run_pipeline.py --plots euclid         # only the post-Euclid-cut figures
 python run_pipeline.py --plots none            # numbers only, no figures
 python run_pipeline.py --max-halos 5000000     # cap catalogue memory
 python run_pipeline.py --format pdf --dpi 300  # publication-ready output
@@ -164,9 +168,29 @@ it be recomputed without re-running the simulation.
 
 `lightcone_fields`, `lightcone_slice`, `halo_catalogue`, `sfr_relations`,
 `uv_luminosity_function`, `stellar_mass_muv`, `main_sequence`,
-`uv_selection_maps`, `power_spectra_2d`, `galaxy_wedge`,
+`uv_selection_maps`, `euclid_selected_catalogue`,
+`selected_galaxy_overdensity`, `galaxy_overdensity_on_21cm`,
+`power_spectra_2d`, `galaxy_wedge`,
 `wedge_real_space`, `cross_snr`, `uncertainty_budget`,
 `photoz_suppression`, `galaxy_bias`.
+
+### `outputs/runs/sim_<run_id>.json` (Stage 1)
+
+One JSON manifest per simulation run, written **before** the expensive stages
+and rewritten after each one. It records the full configuration
+(`parameters`), the derived geometry (`derived`), the pre-flight halo-catalogue
+cost estimate (`cost_estimate`), the code revision and package versions
+(`environment`), per-stage timings, peak RSS, and the results.
+
+Its purpose is to survive a run that never finishes. A process killed by a
+signal cannot flush stdout or run an exit hook, so a crashed run leaves the
+manifest with `"status": "running"` and `"stage"` naming exactly where it died
+— which is what the 2026-08-20 SIGSEGV could not tell anyone. `submit_job.sh`
+reads the newest manifest into its email report for the same reason.
+
+The HDF5 carries `run_id` and `run_manifest` attributes tying a stored dataset
+back to its manifest, and `pipeline_summary.json` echoes them under
+`source_run`.
 
 ### `outputs/pipeline_summary.json` (Stage 4)
 

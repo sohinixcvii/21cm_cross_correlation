@@ -158,6 +158,9 @@ def test_full_run_writes_figures_products_and_summary(workspace) -> None:
         "uv_luminosity_function.png",
         "stellar_mass_muv.png",
         "main_sequence.png",
+        "euclid_selected_catalogue.png",
+        "selected_galaxy_overdensity.png",
+        "galaxy_overdensity_on_21cm.png",
         "power_spectra_2d.png",
         "cross_snr.png",
     ):
@@ -323,3 +326,79 @@ def test_pdf_output_format(workspace) -> None:
     assert sorted(os.listdir(workspace["figdir"])) == [
         "galaxy_wedge.pdf", "power_spectra_2d.pdf", "wedge_real_space.pdf",
     ]
+
+
+def test_euclid_plot_group_is_written(workspace) -> None:
+    """``--plots euclid`` writes only the three post-Euclid-cut figures."""
+    assert run_pipeline.main(
+        base_args(workspace, "--analysis", "force", "--plots", "euclid")
+    ) == 0
+
+    assert sorted(os.listdir(workspace["figdir"])) == [
+        "euclid_selected_catalogue.png",
+        "galaxy_overdensity_on_21cm.png",
+        "selected_galaxy_overdensity.png",
+    ]
+
+
+def test_euclid_group_honours_galaxy_weighting(workspace) -> None:
+    """``--galaxy-weighting luminosity`` reaches the overdensity figures."""
+    assert run_pipeline.main(
+        base_args(
+            workspace, "--analysis", "force", "--plots", "euclid",
+            "--galaxy-weighting", "luminosity",
+        )
+    ) == 0
+
+    assert os.path.exists(
+        os.path.join(workspace["figdir"], "selected_galaxy_overdensity.png")
+    )
+
+
+# ===========================================================================
+#  Run provenance
+# ===========================================================================
+
+def test_summary_names_the_source_simulation_run(workspace) -> None:
+    """
+    The summary points back at the simulation run that made its data.
+
+    ``pipeline_summary.json`` is overwritten every run; the manifest it names
+    is not, so an analysis-only run can still say where its numbers came from.
+    Absent from HDF5 files written before manifests existed, hence the Nones.
+    """
+    assert run_pipeline.main(base_args(workspace, "--plots", "none")) == 0
+
+    with open(workspace["summary"]) as f:
+        summary = json.load(f)
+
+    assert set(summary["source_run"]) == {
+        "run_id", "run_manifest", "random_seed", "n_threads",
+    }
+
+
+def test_simulation_subprocess_runs_unbuffered(workspace, monkeypatch) -> None:
+    """
+    The simulation child is always launched with ``-u``.
+
+    Its stdout is block-buffered when the pipeline's own output is redirected
+    to a file, and a child killed by a signal never flushes — which is how the
+    2026-08-20 SIGSEGV produced a log that could not name the failing stage.
+    """
+    captured = {}
+
+    class _Result:
+        returncode = 0
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        return _Result()
+
+    monkeypatch.setattr(run_pipeline.subprocess, "run", fake_run)
+    run_pipeline.run_simulation_stage(
+        mode="force", data_path=workspace["data"],
+        script="run_simulation.py", quiet=True,
+    )
+
+    assert captured["command"][1] == "-u"
+    assert captured["command"][2] == "run_simulation.py"
