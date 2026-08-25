@@ -377,3 +377,290 @@ def test_effective_galaxy_bias_rejects_empty_selection() -> None:
     )
     with pytest.raises(ValueError, match="no halos passed"):
         analysis.effective_galaxy_bias(empty, z_obs=7.0)
+
+
+# ===========================================================================
+#  Lightcone estimator — TODO.md P0
+# ===========================================================================
+
+class TestSubtractFieldMean:
+    """P0.2 — per-slice mean subtraction."""
+
+    def test_global_mode_removes_one_scalar(self):
+        field = np.arange(2 * 2 * 4, dtype=float).reshape(2, 2, 4)
+        result = analysis.subtract_field_mean(field, "global")
+        assert np.isclose(result.mean(), 0.0)
+        assert np.isclose(np.ptp(result), np.ptp(field))
+
+    def test_per_slice_mode_removes_a_pure_los_ramp(self):
+        ramp = np.ones((4, 4, 8)) * np.arange(8)
+        assert np.allclose(analysis.subtract_field_mean(ramp, "per_slice"), 0.0)
+        assert not np.allclose(analysis.subtract_field_mean(ramp, "global"), 0.0)
+
+    def test_per_slice_mode_leaves_transverse_structure(self):
+        rng = np.random.default_rng(3)
+        field = rng.normal(size=(8, 8, 5)) + np.arange(5) * 10.0
+        result = analysis.subtract_field_mean(field, "per_slice")
+        assert np.allclose(result.mean(axis=(0, 1)), 0.0, atol=1e-12)
+        assert result.std() > 0.5
+
+    def test_rejects_unknown_mode(self):
+        with pytest.raises(ValueError, match="mode must be one of"):
+            analysis.subtract_field_mean(np.zeros((2, 2, 2)), "nope")
+
+    def test_rejects_non_3d_input(self):
+        with pytest.raises(ValueError, match="3D lightcone"):
+            analysis.subtract_field_mean(np.zeros((2, 2)), "global")
+
+
+class TestBlackmanHarrisTaper:
+    """P0.3 — the line-of-sight window."""
+
+    def test_shape_and_endpoints(self):
+        window = analysis.blackman_harris_taper(32)
+        assert window.shape == (32,)
+        assert window[0] < 1e-3 and window[-1] < 1e-3
+        assert np.isclose(window.max(), 1.0, atol=0.02)
+
+    def test_symmetric(self):
+        window = analysis.blackman_harris_taper(17)
+        assert np.allclose(window, window[::-1])
+
+    def test_noise_equivalent_bandwidth(self):
+        # <w^2> is the factor the estimator divides back out.  For the 4-term
+        # window it tends to sum(a_i^2) with the cosine terms halved:
+        # 0.35875^2 + (0.48829^2 + 0.14128^2 + 0.01168^2)/2 = 0.2580.
+        expected = 0.35875 ** 2 + (
+            0.48829 ** 2 + 0.14128 ** 2 + 0.01168 ** 2
+        ) / 2
+        assert np.isclose(np.mean(analysis.blackman_harris_taper(512) ** 2),
+                          expected, atol=1e-3)
+
+    def test_rejects_short_axis(self):
+        with pytest.raises(ValueError, match="n_slices must be"):
+            analysis.blackman_harris_taper(1)
+
+
+class TestTaperedEstimator:
+    """The taper must preserve amplitude and leave the untapered path alone."""
+
+    def test_taper_none_is_the_historical_path(self):
+        rng = np.random.default_rng(11)
+        box = rng.normal(size=(8, 8, 16))
+        bare = analysis.compute_cylindrical_cross_power(box, box, 32.0, 32.0)[2]
+        explicit_none = analysis.compute_cylindrical_cross_power(
+            box, box, 32.0, 32.0, taper=None
+        )[2]
+        assert np.array_equal(np.nan_to_num(bare), np.nan_to_num(explicit_none))
+
+    def test_taper_preserves_white_noise_amplitude(self):
+        rng = np.random.default_rng(12)
+        box = rng.normal(size=(16, 16, 64))
+        bare = analysis.compute_cylindrical_cross_power(box, box, 64.0, 64.0)[2]
+        tapered = analysis.compute_cylindrical_cross_power(
+            box, box, 64.0, 64.0, taper=analysis.blackman_harris_taper(64)
+        )[2]
+        ratio = np.nanmedian(bare / tapered)
+        assert 0.7 < ratio < 1.4
+
+    def test_rejects_taper_of_the_wrong_length(self):
+        box = np.zeros((4, 4, 8))
+        with pytest.raises(ValueError, match="taper length"):
+            analysis.compute_cylindrical_cross_power(
+                box, box, 8.0, 8.0, taper=np.ones(5)
+            )
+
+
+class TestSubbandIndexRanges:
+    """P0.4 — splitting the line of sight to match the noise bandwidth."""
+
+    def test_bands_tile_the_axis_without_gaps(self):
+        ranges = analysis.subband_index_ranges(166, 22.28e6, 8e6)
+        assert ranges[0, 0] == 0
+        assert ranges[-1, 1] == 166
+        assert np.all(ranges[1:, 0] == ranges[:-1, 1])
+
+    def test_band_count_follows_the_bandwidth_ratio(self):
+        assert analysis.subband_index_ranges(166, 22.28e6, 8e6).shape[0] == 3
+        assert analysis.subband_index_ranges(166, 16.0e6, 8e6).shape[0] == 2
+
+    def test_narrow_lightcone_gives_a_single_band(self):
+        ranges = analysis.subband_index_ranges(100, 0.9e6, 8e6)
+        assert ranges.shape == (1, 2)
+        assert ranges[0].tolist() == [0, 100]
+
+    def test_min_slices_per_band_caps_the_split(self):
+        # 20 slices, 40 MHz span: 5 bands by bandwidth, but only 2 survive
+        # the 8-slice floor.
+        ranges = analysis.subband_index_ranges(
+            20, 40e6, 8e6, min_slices_per_band=8
+        )
+        assert ranges.shape[0] == 2
+        assert np.all(np.diff(ranges, axis=1) >= 8)
+
+    @pytest.mark.parametrize("kwargs", [
+        {"n_slices": 0},
+        {"frequency_span_hz": 0.0},
+        {"bandwidth_hz": -1.0},
+        {"min_slices_per_band": 0},
+    ])
+    def test_rejects_non_physical_arguments(self, kwargs):
+        base = dict(n_slices=10, frequency_span_hz=1e6, bandwidth_hz=8e6)
+        base.update(kwargs)
+        with pytest.raises(ValueError):
+            analysis.subband_index_ranges(**base)
+
+
+class TestSubbandPowerSpectra:
+    """P0.3 — one spectrum per band, each with its own redshift and extent."""
+
+    @staticmethod
+    def _lightcone(n_z=48, z_min=6.5, z_max=7.5):
+        rng = np.random.default_rng(5)
+        t21 = rng.normal(size=(8, 8, n_z))
+        gal = rng.normal(size=(8, 8, n_z))
+        z = np.linspace(z_min, z_max, n_z)
+        dist = 8600.0 + np.linspace(0.0, 350.0, n_z)
+        return t21, gal, z, dist
+
+    def test_band_count_and_geometry(self):
+        t21, gal, z, dist = self._lightcone()
+        bands, geometry = analysis.compute_subband_power_spectra(
+            t21, gal, z, dist, box_len_perp=64.0, bandwidth_hz=8e6,
+            min_slices_per_band=8,
+        )
+        assert len(bands) == geometry.n_bands == 3
+        assert geometry.z_effective.shape == (3,)
+        # Bands run low-z to high-z and do not overlap.
+        assert np.all(np.diff(geometry.z_effective) > 0)
+        assert geometry.n_slices.sum() == 48
+        # Each band spans at most the requested bandwidth.
+        assert np.all(geometry.bandwidth_hz <= 8e6)
+
+    def test_each_band_has_the_requested_binning(self):
+        t21, gal, z, dist = self._lightcone()
+        bands, _ = analysis.compute_subband_power_spectra(
+            t21, gal, z, dist, box_len_perp=64.0, bandwidth_hz=8e6,
+            n_bins_perp=6, n_bins_parallel=5, min_slices_per_band=8,
+        )
+        for band in bands:
+            assert band.P_cross.shape == (6, 5)
+            assert band.k_perp.shape == (6,)
+            assert band.k_parallel.shape == (5,)
+
+    def test_effective_redshift_lies_inside_its_band(self):
+        t21, gal, z, dist = self._lightcone()
+        _, geometry = analysis.compute_subband_power_spectra(
+            t21, gal, z, dist, box_len_perp=64.0, bandwidth_hz=8e6,
+            min_slices_per_band=8,
+        )
+        assert np.all(geometry.z_effective >= geometry.z_min)
+        assert np.all(geometry.z_effective <= geometry.z_max)
+
+    def test_bands_sample_lower_k_parallel_than_the_whole_box(self):
+        # Each band is shorter, so its fundamental k_parallel is larger.
+        t21, gal, z, dist = self._lightcone()
+        bands, geometry = analysis.compute_subband_power_spectra(
+            t21, gal, z, dist, box_len_perp=64.0, bandwidth_hz=8e6,
+            min_slices_per_band=8,
+        )
+        whole = analysis.compute_all_power_spectra(
+            t21, gal, box_len_perp=64.0, box_len_los=350.0,
+        )
+        assert bands[0].k_parallel.min() > whole.k_parallel.min()
+        assert np.all(geometry.los_length_mpc < 350.0)
+
+    def test_single_band_when_the_lightcone_is_narrow(self):
+        t21, gal, z, dist = self._lightcone(n_z=16, z_min=6.995, z_max=7.005)
+        bands, geometry = analysis.compute_subband_power_spectra(
+            t21, gal, z, dist, box_len_perp=64.0, bandwidth_hz=8e6,
+            min_slices_per_band=8,
+        )
+        assert geometry.n_bands == 1
+        assert bands[0].P_cross.shape == (20, 20)
+
+    def test_rejects_mismatched_inputs(self):
+        t21, gal, z, dist = self._lightcone(n_z=16)
+        with pytest.raises(ValueError, match="must match the LOS axis"):
+            analysis.compute_subband_power_spectra(
+                t21, gal, z[:-1], dist, box_len_perp=64.0,
+            )
+        with pytest.raises(ValueError, match="field shapes differ"):
+            analysis.compute_subband_power_spectra(
+                t21, gal[:, :, :-1], z, dist, box_len_perp=64.0,
+            )
+
+
+class TestCombineBandSnr:
+    """Independent bands add in quadrature."""
+
+    def test_quadrature_sum(self):
+        assert np.isclose(analysis.combine_band_snr([3.0, 4.0]), 5.0)
+
+    def test_ignores_nan_bands(self):
+        assert np.isclose(analysis.combine_band_snr([3.0, np.nan, 4.0]), 5.0)
+
+    def test_single_band_is_itself(self):
+        assert np.isclose(analysis.combine_band_snr([2.5]), 2.5)
+
+
+class TestEstimatorDefaultsUnchanged:
+    """The coeval formalism must survive the P0 additions untouched."""
+
+    def test_default_mean_subtraction_is_global(self, tiny_sim):
+        spectra = analysis.compute_all_power_spectra(
+            tiny_sim.brightness_temp_field, tiny_sim.galaxy_overdensity,
+            box_len_perp=tiny_sim.BOX_LEN, box_len_los=tiny_sim.L_los,
+        )
+        explicit = analysis.compute_all_power_spectra(
+            tiny_sim.brightness_temp_field, tiny_sim.galaxy_overdensity,
+            box_len_perp=tiny_sim.BOX_LEN, box_len_los=tiny_sim.L_los,
+            mean_subtraction="global", taper=None,
+        )
+        assert np.array_equal(
+            np.nan_to_num(spectra.P_cross), np.nan_to_num(explicit.P_cross)
+        )
+
+    def test_per_slice_zeroes_the_transverse_mean_profile(self):
+        """P0.2's direct effect: no residual <T_b>(z) evolution is left."""
+        rng = np.random.default_rng(21)
+        field = rng.normal(size=(16, 16, 32)) + np.linspace(0.0, 40.0, 32)
+
+        global_mode = analysis.subtract_field_mean(field, "global")
+        per_slice = analysis.subtract_field_mean(field, "per_slice")
+
+        assert np.ptp(global_mode.mean(axis=(0, 1))) > 30.0
+        assert np.allclose(per_slice.mean(axis=(0, 1)), 0.0, atol=1e-12)
+
+    def test_uniform_ramp_lives_at_k_perp_zero_and_is_already_binned_out(self):
+        """
+        Why P0.2 barely moves *these* spectra.
+
+        A line-of-sight ramp that is uniform across the sky has essentially
+        all its power at ``k_perp = 0``, and the log-spaced binning starts at
+        ``0.5 dk_perp``, so that column never enters a bin.  Per-slice mean
+        subtraction is still the correct operation — it just cannot show up
+        in the binned output for this particular contaminant.  Recorded as a
+        regression guard so the claim is not quietly overstated later.
+        """
+        rng = np.random.default_rng(21)
+        signal = rng.normal(size=(16, 16, 32))
+        field = signal + np.linspace(0.0, 40.0, 32)
+
+        fourier = np.fft.fftn(field - field.mean())
+        power_at_k_perp_zero = np.sum(np.abs(fourier[0, 0, :]) ** 2)
+        assert power_at_k_perp_zero / np.sum(np.abs(fourier) ** 2) > 0.99
+
+        global_mode = analysis.compute_all_power_spectra(
+            field, signal, box_len_perp=32.0, box_len_los=64.0,
+            mean_subtraction="global",
+        )
+        per_slice = analysis.compute_all_power_spectra(
+            field, signal, box_len_perp=32.0, box_len_los=64.0,
+            mean_subtraction="per_slice",
+        )
+        assert np.allclose(
+            np.nan_to_num(global_mode.P_21cm_auto),
+            np.nan_to_num(per_slice.P_21cm_auto),
+            rtol=1e-9, atol=1e-9,
+        )

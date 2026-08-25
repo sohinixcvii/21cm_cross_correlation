@@ -47,11 +47,13 @@ through `conda run -n 21cmfast <command>`.
 ### 2. Run the HPC pipeline
 
 ```bash
+python run_pipeline.py --smoke-test      # pre-flight: every stage, tiny box, seconds
 python run_pipeline.py                   # everything; simulation runs only if the HDF5 is missing
 python run_pipeline.py --sim force       # re-run the 21cmFAST simulation first
 python run_pipeline.py --analysis force  # recompute the power spectra from stored fields
 python run_pipeline.py --plots power snr # only the k-space figures
 python run_pipeline.py --sigma-z 0.05    # sweep a survey parameter without re-simulating
+python run_pipeline.py --estimator lightcone   # per-sub-band spectra (TODO.md P0)
 bash submit_job.sh --sim force           # same, with timing + email notification
 ```
 
@@ -162,6 +164,9 @@ changing any of them needs `--sim force` to take effect:
 | `M_UV_limit` / `M_UV_bright` | `-18` / `-22` | Euclid magnitude window |
 | `mean_galaxy_density` | `3e-3` | $\bar n_\mathrm{gal}$ [$h^3$ Mpc⁻³] |
 | `GALAXY_WEIGHTING` | `"lightcone_sfr"` | `lightcone_sfr` \| `number` \| `luminosity` — how $\delta_\mathrm{gal}$ is built |
+| `ESTIMATOR` | `"coeval"` | `coeval` \| `lightcone` — which power-spectrum formalism the run is built for (see below) |
+| `LIGHTCONE_SAMPLING` | derived → `"redshift"` | `redshift` \| `comoving`; `comoving` is `TODO.md` P0.1 |
+| `GALAXY_MEAN_SUBTRACTION` | derived → `"global"` | `global` \| `per_slice`; `per_slice` is `TODO.md` P0.2 |
 | `N_THREADS` | `N_THREADS` env → `SLURM_CPUS_PER_TASK` → `os.cpu_count()` | OpenMP threads for 21cmFAST. Its own default is **1**, which is why the 2026-08-20 run spent 38 minutes on a single core |
 | `MINIMIZE_MEMORY` | `True` | Trades peak RAM for intermediate I/O in the C backend |
 | `RANDOM_SEED` | `42` | 21cmFAST initial-conditions seed; recorded in the manifest and the HDF5 attrs |
@@ -185,7 +190,9 @@ memory and storage it needs, and the two blockers in front of it.
 > `src/analysis.py` assumes statistical homogeneity along the LOS, which only
 > holds for a quasi-coeval box, so configuration and formalism currently match.
 > Widening to a true lightcone requires the estimator work in
-> [`TODO.md`](TODO.md) §P0 first. Treat the resulting SNR as a smoke-test
+> [`TODO.md`](TODO.md) §P0 — **now implemented, behind the `ESTIMATOR`
+> toggle**, though the range itself has not been widened yet (P0.5).
+> Treat the resulting SNR as a smoke-test
 > number, not a forecast.
 
 ### 3. Run the notebooks
@@ -332,12 +339,64 @@ to cap the memory footprint.
 └── README.md                              # This file
 ```
 
+## Smoke test — pre-flight before an HPC job
+
+```bash
+python run_pipeline.py --smoke-test          # whole pipeline, tiny box, seconds
+python run_pipeline.py --smoke-test --plots none   # skip the figures
+python run_simulation.py --smoke-test        # simulation stage only
+```
+
+Runs every stage — halo catalogue → 21 cm lightcone → galaxy field → bias →
+Kaiser RSD → HDF5 → power spectra → photo-z/wedge/noise/SNR → figures →
+summary — on a deliberately tiny configuration, and **asserts the shape of
+each stage's output** rather than just checking it did not crash. It prints a
+PASS/FAIL line per stage and exits non-zero if any check fails.
+
+> **Not a science run.** Its numbers mean nothing: a 32 Mpc box does not
+> sample the modes the forecast needs. Use it to prove the plumbing works
+> before spending cluster time.
+
+The reduced values live in [`src/smoke_test.py`](src/smoke_test.py) as
+`SMOKE_TEST_OVERRIDES`, a module imported **only** when the flag is set — no
+production default is edited, shadowed or reassigned without it, and outputs
+go to `outputs/smoke_test/` so a real run's products can never be overwritten.
+`SMOKE_TEST_UNCHANGED` records what was deliberately left alone and why.
+
+## The estimator toggle (`TODO.md` P0)
+
+The power-spectrum estimator was inherited from a *coeval* notebook and
+assumes the box is statistically homogeneous along the line of sight. That
+holds for the committed quasi-coeval slab and fails for a true lightcone, so
+both formalisms now exist:
+
+| | `"coeval"` (default) | `"lightcone"` |
+|---|---|---|
+| LOS sampling | uniform in redshift | uniform in comoving distance (P0.1) |
+| Mean subtraction | one global scalar | per-slice, both fields (P0.2) |
+| Transform | one FFT over the box | one per sub-band, Blackman-Harris tapered (P0.3) |
+| Noise bandwidth | the configured 8 MHz | each band's own frequency span (P0.4) |
+| Result | one spectrum, one SNR | one spectrum and budget per band, combined in quadrature |
+
+`ESTIMATOR = "coeval"` reproduces every number this pipeline has produced,
+bit for bit; everything P0 added is opt-in. The analysis stage reads the
+`estimator` attribute back from the HDF5 and follows it, so the simulation and
+the analysis cannot silently disagree — `--estimator {auto,coeval,lightcone}`
+overrides that for a re-analysis from cached spectra, and
+`--subband-bandwidth` sets the band width (default: the noise bandwidth,
+which is the point of P0.4).
+
+Under `lightcone`, per-band results reach `pipeline_summary.json` under
+`subbands` and are printed as a table. **P0.5 — widening the redshift range
+itself — is still open**; see [`TODO.md`](TODO.md).
+
 ## Documentation
 
 | Document | Contents |
 |----------|----------|
 | [`docs/reference.md`](docs/reference.md) | **The long-form companion to this README** — notebook structure, equations and fiducial parameters; the literature relations overlaid on each figure; the 21cmFAST v4 `HaloBox`/lightcone API notes and source-model templates; the `src/` function reference; and the full bibliography |
 | [`PIPELINE.md`](PIPELINE.md) | HPC pipeline summary, Mermaid flowchart, stage table, and the `lightcone_data.h5` schema |
+| [`src/smoke_test.py`](src/smoke_test.py) | **The pre-flight smoke test** — the reduced configuration, what each override replaces and why, what was deliberately left alone, and the per-stage shape checks |
 | [`docs/simulation_spec.md`](docs/simulation_spec.md) | **The planned run's specification and its cost** — every parameter and derived number for the production lightcone ($z = 6.55$–$7.45$ in the footprint-derived box), the compute / memory / scratch / wall-time requirements with their measured baselines, the two blockers that stand in front of it, a SLURM template, and what to look up about a new cluster to firm up the wall-time estimate |
 | [`docs/HPC.md`](docs/HPC.md) | **Parameter-level ground truth for the HPC run** — every configuration value, derived quantity, formula with its evaluated number at $z=7$, file written, disk footprint, and known inconsistency. **§13 is the user-defined parameter checklist** |
 | [`docs/uncertainty_budget.md`](docs/uncertainty_budget.md) | **The uncertainty budget, end to end** — every formula of the photo-$z$ / wedge / noise / SNR chain with its evaluated number at $z=7$, the audit against the source notebook, the CLI overrides, the HDF5 schema, and what the calculation still does not do |

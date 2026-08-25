@@ -7,6 +7,121 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Smoke-test mode, 2026-08-25 ─────────────────────────────────────── -->
+
+### Added
+
+- **`--smoke-test`: a pre-flight run of the whole pipeline on a tiny
+  configuration**, to prove every stage executes and produces
+  correctly-shaped output before cluster time is spent. Accepted by both
+  `run_simulation.py` and `run_pipeline.py`.
+
+  **No production parameter was edited to build it.** The reduced values live
+  in `src/smoke_test.py` as `SMOKE_TEST_OVERRIDES`, a module imported *only*
+  when the flag is set; `run_simulation.py`'s configuration block is
+  byte-for-byte unchanged, and a regression test
+  (`test_production_defaults_are_not_edited_by_the_override_path`) asserts
+  that the documented values are still present verbatim and that no smoke
+  value leaked into the block.
+
+  | Overridden | Smoke | Production | Why |
+  |---|---|---|---|
+  | `HII_DIM` / `BOX_LEN` / `DIM` | 16 / 32.0 Mpc / 48 | 256 / 486.33 Mpc / 768 | the catalogue scales with the box's cube — a factor ~3500 |
+  | `minimum_los_slices` | 12 | 100 | sets the lightcone's third dimension |
+  | `n_bins_perp` / `n_bins_parallel` | 8 / 8 | 20 / 20 | a 16-cell grid cannot fill 20 log bins |
+  | `max_halos` | 200,000 | 0 (all) | caps the analysis-stage catalogue read |
+
+  Deliberately **not** overridden, and recorded as such in
+  `SMOKE_TEST_UNCHANGED`: `SURVEY_AREA_DEG2` (the box is overridden directly,
+  so the documented 10 deg² footprint stays as written), `integration_time`,
+  `bandwidth`, `photoz_uncertainty`, `wedge_buffer`, the magnitude cuts and
+  `RANDOM_SEED` — all post-processing scalars that cost no runtime.
+
+  Outputs go to `outputs/smoke_test/`, so a pre-flight check can never
+  overwrite a real run's `lightcone_data.h5`.
+
+- **Shape checks, not just "it didn't crash".** `src/smoke_test.py` provides
+  `check_simulation_output`, `check_power_spectra`, `check_uncertainty_budget`,
+  `check_figures`, `check_summary` and `check_mcmc_chain`, each returning a
+  `SmokeReport` that prints one PASS/FAIL line per stage. They assert field
+  shapes against the requested grid, `x_HI ∈ [0, 1]`, catalogue array
+  consistency, the `(n_perp, n_par)` binning of all three spectra and of the
+  budget maps, that not every bin is empty, and that written figures are
+  non-empty. The checker is itself unit-tested against deliberately corrupted
+  inputs (`tests/test_smoke_test.py`, 32 tests), because a smoke test that
+  passes on broken output is worse than none.
+
+- **`--smoke-test` forces the halo-catalogue read** even under `--plots none`.
+  Found by the checker on its first run: with no figure group requesting it,
+  `load_simulation` skips the catalogue entirely, so the stage the smoke test
+  most needs to exercise was being silently skipped.
+
+### Note
+
+**There is no MCMC stage in this project.** Nothing samples a posterior,
+`emcee` is not a dependency, and no chain is written, so no chain shape is
+asserted. `check_mcmc_chain` exists as a hook — it validates
+`(n_walkers, n_steps, n_parameters)` when handed a chain, and otherwise
+reports the stage as *absent* rather than passing over it silently.
+
+<!-- ─── TODO.md P0: the lightcone estimator, 2026-08-25 ─────────────────── -->
+
+### Added
+
+- **`TODO.md` P0.1–P0.4 implemented, behind an `ESTIMATOR` toggle.** The
+  power-spectrum estimator was inherited from a coeval notebook and assumes
+  line-of-sight homogeneity. Both formalisms now exist side by side:
+
+  | | `"coeval"` (default) | `"lightcone"` |
+  |---|---|---|
+  | LOS sampling | uniform in redshift | uniform in comoving distance (P0.1) |
+  | Mean subtraction | one global scalar | per-slice, both fields (P0.2) |
+  | Transform | one FFT over the box | one per sub-band, Blackman-Harris tapered (P0.3) |
+  | Noise bandwidth | the configured 8 MHz | each band's own span (P0.4) |
+
+  `ESTIMATOR = "coeval"` in `run_simulation.py` reproduces every number this
+  pipeline has ever produced, bit for bit — the taper, the per-slice means and
+  the sub-band split are all opt-in, and a regression test asserts the default
+  path is unchanged. The analysis stage reads `estimator` back from the HDF5
+  and follows it, so the two halves cannot silently disagree;
+  `run_pipeline.py --estimator {auto,coeval,lightcone}` overrides it for a
+  re-analysis from cached spectra.
+
+  New in `src/analysis.py`: `subtract_field_mean`, `blackman_harris_taper`,
+  `subband_index_ranges`, `compute_subband_power_spectra`, `combine_band_snr`,
+  `SubbandGeometry`, plus `taper` and `mean_subtraction` arguments on
+  `compute_cylindrical_cross_power` and `compute_all_power_spectra`. New in
+  `src/dataio.py`: `SubbandPowerSpectra` and its cache, written so that the
+  first band also lands at the file root — a reader that knows nothing about
+  sub-bands still sees a valid single-band cache.
+
+  Per-band results reach `pipeline_summary.json` under `subbands` (effective
+  redshift, span, comoving extent, slices and SNR per band, plus the combined
+  total) and are printed as a table by `print_report`.
+
+### Two findings worth recording
+
+- **P0.2 moves these spectra far less than `TODO.md` claimed, and the
+  docstrings now say so.** A line-of-sight ramp that is uniform across the sky
+  puts **~99 % of its power at k_⊥ = 0**, and
+  `compute_cylindrical_cross_power` bins from 0.5 Δk_⊥ upwards — so that
+  column is discarded before binning, and global and per-slice subtraction
+  agree to floating-point precision on such a field. The claim that the ramp
+  "aliases directly into low-k_∥ power, which is precisely where the
+  foreground-wedge analysis looks" is not true of this estimator. Per-slice
+  subtraction is still correct, and matters for anything using k_⊥ = 0.
+
+  What *does* couple redshift evolution to non-zero k_⊥ is that
+  δT_b = T_0(z)[1 + δ]: the evolving mean is a **gain**, not an offset, and
+  subtracting a per-slice mean does not undo a per-slice gain. Per-slice
+  *normalisation* would, and changes what the amplitude of P_21 means — so it
+  is filed as `TODO.md` P1.4 rather than folded in silently.
+
+- **The sub-band estimator makes the `L_los` bug moot at the production
+  range.** Each band's comoving extent is computed from `lc_dist_Mpc`
+  directly, not from the stored `L_los` attribute that `docs/HPC.md` §11.1
+  records as wrong by 56.5× on the smoke-test slab.
+
 <!-- ─── Planned-run specification, 2026-08-24 ───────────────────────────── -->
 
 ### Added

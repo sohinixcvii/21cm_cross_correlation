@@ -11,7 +11,15 @@ import numpy as np
 import pytest
 
 from src import dataio
-from src.dataio import PowerSpectra, SimulationData
+from src.dataio import (
+    PowerSpectra,
+    SimulationData,
+    SubbandPowerSpectra,
+    load_power_spectra,
+    load_subband_power_spectra,
+    save_power_spectra,
+    save_subband_power_spectra,
+)
 
 from conftest import TINY_HII_DIM, TINY_N_HALOS, TINY_N_Z, write_tiny_simulation
 
@@ -124,3 +132,81 @@ def test_products_are_stale_detects_missing_and_newer_source(
     os.utime(newer, (time.time() + 10, time.time() + 10))
     dataio.save_power_spectra(path, spectra, tiny_sim_path)
     assert dataio.products_are_stale(path, newer)
+
+
+# ===========================================================================
+#  Sub-band power-spectrum cache — TODO.md P0.3
+# ===========================================================================
+
+class TestSubbandPowerSpectraCache:
+    """The lightcone estimator's cache must round-trip, and stay readable."""
+
+    @staticmethod
+    def _subbands(n_bands=3, n_perp=4, n_par=5):
+        rng = np.random.default_rng(2)
+        bands = [
+            PowerSpectra(
+                k_perp=np.linspace(0.1, 1.0, n_perp),
+                k_parallel=np.linspace(0.1, 1.0, n_par),
+                P_21cm_auto=rng.normal(size=(n_perp, n_par)),
+                P_galaxy_auto=rng.normal(size=(n_perp, n_par)),
+                P_cross=rng.normal(size=(n_perp, n_par)),
+                mode_counts=rng.integers(1, 20, size=(n_perp, n_par)).astype(float),
+            )
+            for _ in range(n_bands)
+        ]
+        return SubbandPowerSpectra(
+            bands=bands,
+            z_effective=np.linspace(6.6, 7.4, n_bands),
+            z_min=np.linspace(6.55, 7.35, n_bands),
+            z_max=np.linspace(6.65, 7.45, n_bands),
+            frequency_min_hz=np.linspace(1.68e8, 1.80e8, n_bands),
+            frequency_max_hz=np.linspace(1.70e8, 1.88e8, n_bands),
+            bandwidth_hz=np.full(n_bands, 7.5e6),
+            los_length_mpc=np.full(n_bands, 105.0),
+            n_slices=np.full(n_bands, 55, dtype=int),
+            index_ranges=np.column_stack(
+                (np.arange(n_bands) * 55, (np.arange(n_bands) + 1) * 55)
+            ),
+        )
+
+    def test_round_trip_preserves_every_band(self, tmp_path, tiny_sim_path):
+        path = str(tmp_path / "products.h5")
+        original = self._subbands()
+        save_subband_power_spectra(path, original, tiny_sim_path)
+
+        loaded, attrs = load_subband_power_spectra(path)
+        assert loaded is not None
+        assert loaded.n_bands == original.n_bands
+        assert attrs["estimator"] == "lightcone"
+        for stored, band in zip(loaded.bands, original.bands):
+            assert np.allclose(stored.P_cross, band.P_cross)
+            assert np.allclose(stored.mode_counts, band.mode_counts)
+        assert np.allclose(loaded.z_effective, original.z_effective)
+        assert np.allclose(loaded.bandwidth_hz, original.bandwidth_hz)
+        assert np.array_equal(loaded.index_ranges, original.index_ranges)
+
+    def test_first_band_is_readable_as_a_plain_cache(self, tmp_path, tiny_sim_path):
+        """A reader that knows nothing about sub-bands still gets valid spectra."""
+        path = str(tmp_path / "products.h5")
+        subbands = self._subbands()
+        save_subband_power_spectra(path, subbands, tiny_sim_path)
+
+        spectra, _ = load_power_spectra(path)
+        assert np.allclose(spectra.P_cross, subbands.bands[0].P_cross)
+
+    def test_coeval_cache_reports_no_subbands(self, tmp_path, tiny_sim_path):
+        path = str(tmp_path / "products.h5")
+        save_power_spectra(path, self._subbands().bands[0], tiny_sim_path)
+
+        loaded, attrs = load_subband_power_spectra(path)
+        assert loaded is None
+        assert "estimator" not in attrs
+
+    def test_rejects_an_empty_container(self, tmp_path, tiny_sim_path):
+        empty = self._subbands(n_bands=1)
+        empty.bands = []
+        with pytest.raises(ValueError, match="empty SubbandPowerSpectra"):
+            save_subband_power_spectra(
+                str(tmp_path / "products.h5"), empty, tiny_sim_path
+            )

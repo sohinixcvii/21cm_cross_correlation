@@ -72,9 +72,12 @@ from src import analysis, figures                       # noqa: E402
 from src.dataio import (                                # noqa: E402
     SimulationData,
     load_power_spectra,
+    load_subband_power_spectra,
+    SubbandPowerSpectra,
     load_simulation,
     products_are_stale,
     save_power_spectra,
+    save_subband_power_spectra,
     save_uncertainty_budget,
 )
 
@@ -144,6 +147,7 @@ def run_simulation_stage(
     mode: str,
     data_path: str,
     script: str,
+    smoke_test: bool = False,
     quiet: bool = False,
 ) -> bool:
     """
@@ -200,7 +204,11 @@ def run_simulation_stage(
     # pipeline's own output is redirected to a file, and a child killed by a
     # signal never flushes — which is how the 2026-08-20 SIGSEGV produced a
     # log with no indication of which stage had failed.
-    result = subprocess.run([sys.executable, "-u", script], cwd=REPO_ROOT)
+    command = [sys.executable, "-u", script]
+    if smoke_test:
+        # The child owns its own reduced configuration; see src/smoke_test.py.
+        command.append("--smoke-test")
+    result = subprocess.run(command, cwd=REPO_ROOT)
 
     if result.returncode != 0:
         raise RuntimeError(
@@ -219,6 +227,8 @@ def power_spectra_stage(
     mode: str,
     data: SimulationData,
     products_path: str,
+    estimator: str = "coeval",
+    subband_bandwidth: float = 8e6,
     quiet: bool = False,
 ):
     """
@@ -233,13 +243,28 @@ def power_spectra_stage(
         Loaded simulation.
     products_path : str
         Cache file for the spectra.
+    estimator : {'coeval', 'lightcone'}, optional
+        Which formalism to measure with.  ``'coeval'`` (default) takes one
+        FFT over the whole box with a global mean subtracted — valid while
+        the box is quasi-coeval, and what every earlier result used.
+        ``'lightcone'`` applies `TODO.md` P0.2–P0.4: per-slice means, a
+        Blackman-Harris taper, and one spectrum per frequency sub-band.
+    subband_bandwidth : float, optional
+        Target per-band bandwidth [Hz] for the lightcone estimator.  Match it
+        to the noise model's bandwidth — that match is P0.4.
     quiet : bool, optional
         Suppress progress output.
 
     Returns
     -------
     PowerSpectra
-        The three spectra on a shared ``(k_perp, k_parallel)`` grid.
+        The three spectra on a shared ``(k_perp, k_parallel)`` grid.  Under
+        the lightcone estimator this is the band whose effective redshift is
+        closest to ``z_obs``, so downstream figures have one representative
+        set; the per-band spectra are in the second return value.
+    SubbandPowerSpectra or None
+        The per-band spectra and geometry, or ``None`` under the coeval
+        estimator.
     bool
         True if the spectra were recomputed (rather than loaded).
 
@@ -256,28 +281,77 @@ def power_spectra_stage(
                 f"no cached analysis products at {products_path}, and "
                 "--analysis=skip.\nRun with --analysis force to compute them."
             )
+        subbands, _ = load_subband_power_spectra(products_path)
         spectra, attrs = load_power_spectra(products_path)
         log(f"  Loaded cached power spectra: {products_path}", quiet)
+        if subbands is not None:
+            log(f"  Cache holds {subbands.n_bands} sub-bands "
+                f"(z_eff {subbands.z_effective.min():.3f}–"
+                f"{subbands.z_effective.max():.3f})", quiet)
         if stale:
             log("  WARNING: cache is older than the simulation output "
                 "(use --analysis force to refresh).", quiet)
-        return spectra, False
+        return spectra, subbands, False
 
-    log("  Computing 2D cylindrical power spectra …", quiet)
+    n_bins_perp = int(data.get("n_bins_perp", 20))
+    n_bins_parallel = int(data.get("n_bins_parallel", 20))
     start = time.time()
 
+    if estimator == "lightcone":
+        # TODO.md P0.3/P0.4 — one spectrum per frequency sub-band, each at its
+        # own effective redshift and its own bandwidth.
+        log("  Computing sub-band power spectra (lightcone estimator) …", quiet)
+        bands, geometry = analysis.compute_subband_power_spectra(
+            brightness_temp_field=data.brightness_temp_field,
+            galaxy_overdensity=data.galaxy_overdensity,
+            lc_redshifts=data.lc_redshifts,
+            lc_dist_Mpc=data.lc_dist_Mpc,
+            box_len_perp=data.BOX_LEN,
+            bandwidth_hz=subband_bandwidth,
+            n_bins_perp=n_bins_perp,
+            n_bins_parallel=n_bins_parallel,
+            f_21_hz=data.get("F_21_HZ", 1420.405e6),
+        )
+        subbands = SubbandPowerSpectra(
+            bands=bands,
+            z_effective=geometry.z_effective,
+            z_min=geometry.z_min,
+            z_max=geometry.z_max,
+            frequency_min_hz=geometry.frequency_min_hz,
+            frequency_max_hz=geometry.frequency_max_hz,
+            bandwidth_hz=geometry.bandwidth_hz,
+            los_length_mpc=geometry.los_length_mpc,
+            n_slices=geometry.n_slices,
+            index_ranges=geometry.index_ranges,
+        )
+        for index in range(subbands.n_bands):
+            log(f"    band {index}: z = {geometry.z_min[index]:.3f}–"
+                f"{geometry.z_max[index]:.3f} (z_eff {geometry.z_effective[index]:.3f}), "
+                f"{geometry.n_slices[index]} slices, "
+                f"{geometry.bandwidth_hz[index] / 1e6:.2f} MHz, "
+                f"L_los {geometry.los_length_mpc[index]:.1f} Mpc", quiet)
+
+        save_subband_power_spectra(products_path, subbands, data.path)
+        # Figures need one representative set: the band closest to z_obs.
+        spectra = subbands.bands[
+            int(np.argmin(np.abs(geometry.z_effective - data.z_obs)))
+        ]
+        log(f"  Done in {time.time() - start:.1f} s → {products_path}", quiet)
+        return spectra, subbands, True
+
+    log("  Computing 2D cylindrical power spectra …", quiet)
     spectra = analysis.compute_all_power_spectra(
         brightness_temp_field=data.brightness_temp_field,
         galaxy_overdensity=data.galaxy_overdensity,
         box_len_perp=data.BOX_LEN,
         box_len_los=data.L_los,
-        n_bins_perp=int(data.get("n_bins_perp", 20)),
-        n_bins_parallel=int(data.get("n_bins_parallel", 20)),
+        n_bins_perp=n_bins_perp,
+        n_bins_parallel=n_bins_parallel,
     )
 
     save_power_spectra(products_path, spectra, data.path)
     log(f"  Done in {time.time() - start:.1f} s → {products_path}", quiet)
-    return spectra, True
+    return spectra, None, True
 
 
 def observational_stage(
@@ -289,6 +363,7 @@ def observational_stage(
     bandwidth: Optional[float] = None,
     noise_model: str = "scaling",
     mode_weighted: bool = False,
+    z_obs: Optional[float] = None,
     quiet: bool = False,
 ) -> analysis.UncertaintyBudget:
     """
@@ -325,6 +400,11 @@ def observational_stage(
     mode_weighted : bool, optional
         Apply the La Plante Eq. 19 ``sqrt(N_patch dN)`` weighting when summing
         bins.  Default ``False``, preserving the historical total.
+    z_obs : float, optional
+        Reference redshift override.  Defaults to the simulation's own
+        ``z_obs``; the sub-band estimator passes each band's effective
+        redshift instead, since the wedge slope, ``T_sys`` and the photo-z
+        smearing all depend on it.
     quiet : bool, optional
         Suppress progress output.
 
@@ -339,7 +419,7 @@ def observational_stage(
 
     budget = analysis.compute_uncertainty_budget(
         spectra=spectra,
-        z_obs=data.z_obs,
+        z_obs=data.z_obs if z_obs is None else float(z_obs),
         photoz_uncertainty=resolve(
             photoz_uncertainty, "photoz_uncertainty", 0.45
         ),
@@ -392,6 +472,84 @@ def observational_stage(
     log(f"  Total SNR (outside wedge) : {budget.total_snr:.3g} σ", quiet)
 
     return budget
+
+
+def subband_observational_stage(
+    data: SimulationData,
+    subbands,
+    photoz_uncertainty: Optional[float] = None,
+    wedge_buffer: Optional[float] = None,
+    integration_time: Optional[float] = None,
+    noise_model: str = "scaling",
+    mode_weighted: bool = False,
+    quiet: bool = False,
+):
+    """
+    Uncertainty budget per frequency sub-band, combined in quadrature.
+
+    One call to :func:`observational_stage` per band, each at that band's own
+    effective redshift and its own bandwidth. The redshift matters because
+    the wedge slope, ``T_sys`` and the photo-z smearing all depend on it; the
+    bandwidth matters because a spectrum measured over one band and a noise
+    level computed for another are not commensurate (`TODO.md` P0.4).
+
+    Parameters
+    ----------
+    data : SimulationData
+        Loaded simulation, for the survey and instrument metadata.
+    subbands : SubbandPowerSpectra
+        Per-band spectra from :func:`power_spectra_stage`.
+    photoz_uncertainty, wedge_buffer, integration_time : float, optional
+        Overrides passed through to :func:`observational_stage`.  ``bandwidth``
+        is deliberately absent: it is set per band by the geometry.
+    noise_model : {'scaling', 'physical'}, optional
+        21 cm thermal-noise model.
+    mode_weighted : bool, optional
+        Apply the La Plante Eq. 19 weighting within each band.
+    quiet : bool, optional
+        Suppress progress output.
+
+    Returns
+    -------
+    UncertaintyBudget
+        The band closest to ``z_obs``, for figures and the summary's scalar
+        fields.
+    list of UncertaintyBudget
+        One budget per band, in lightcone order.
+    float
+        Combined significance, ``sqrt(sum(SNR_band^2))``.
+    """
+    band_budgets = []
+    for index, band in enumerate(subbands.bands):
+        z_eff = float(subbands.z_effective[index])
+        band_bandwidth = float(subbands.bandwidth_hz[index])
+        log(f"\n  Band {index}: z_eff = {z_eff:.3f}, "
+            f"B = {band_bandwidth / 1e6:.2f} MHz", quiet)
+
+        band_budgets.append(
+            observational_stage(
+                data, band,
+                z_obs=z_eff,
+                photoz_uncertainty=photoz_uncertainty,
+                wedge_buffer=wedge_buffer,
+                integration_time=integration_time,
+                bandwidth=band_bandwidth,
+                noise_model=noise_model,
+                mode_weighted=mode_weighted,
+                quiet=quiet,
+            )
+        )
+
+    band_totals = np.array([b.total_snr for b in band_budgets], dtype=float)
+    combined = analysis.combine_band_snr(band_totals)
+
+    representative = int(np.argmin(np.abs(subbands.z_effective - data.z_obs)))
+    log(f"\n  Per-band SNR        : "
+        + ", ".join(f"{value:.3g}" for value in band_totals), quiet)
+    log(f"  Combined SNR        : {combined:.3g} σ "
+        f"(quadrature over {len(band_totals)} bands)", quiet)
+
+    return band_budgets[representative], band_budgets, combined
 
 
 def bias_stage(
@@ -610,6 +768,10 @@ def build_summary(
     figure_paths: Sequence[str],
     ran_simulation: bool,
     recomputed_spectra: bool,
+    estimator: str = "coeval",
+    subbands=None,
+    band_budgets=None,
+    combined_snr: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Collect the pipeline's scalar results into a JSON-serialisable dict.
@@ -632,6 +794,14 @@ def build_summary(
         Whether the simulation stage executed.
     recomputed_spectra : bool
         Whether the power spectra were recomputed rather than loaded.
+    estimator : {'coeval', 'lightcone'}, optional
+        Which formalism produced the spectra.
+    subbands : SubbandPowerSpectra, optional
+        Per-band spectra, when the lightcone estimator ran.
+    band_budgets : list of UncertaintyBudget, optional
+        One budget per band, from :func:`subband_observational_stage`.
+    combined_snr : float, optional
+        Quadrature sum of the per-band totals.
 
     Returns
     -------
@@ -676,6 +846,33 @@ def build_summary(
         "uncertainty_budget": budget.as_dict(),
         "figures": [os.path.abspath(p) for p in figure_paths],
     }
+
+    summary["estimator"] = estimator
+    if subbands is not None:
+        # Per-band results are the only ones with a well-defined redshift
+        # under the lightcone estimator, so they are reported individually as
+        # well as combined.
+        summary["subbands"] = {
+            "n_bands": subbands.n_bands,
+            "z_effective": [float(z) for z in subbands.z_effective],
+            "z_min": [float(z) for z in subbands.z_min],
+            "z_max": [float(z) for z in subbands.z_max],
+            "bandwidth_MHz": [float(b) / 1e6 for b in subbands.bandwidth_hz],
+            "los_length_Mpc": [float(v) for v in subbands.los_length_mpc],
+            "n_slices": [int(n) for n in subbands.n_slices],
+            "total_snr_per_band": (
+                [float(b.total_snr) for b in band_budgets]
+                if band_budgets is not None else None
+            ),
+            "combined_total_snr": (
+                float(combined_snr) if combined_snr is not None else None
+            ),
+            "representative_z_eff": float(
+                subbands.z_effective[
+                    int(np.argmin(np.abs(subbands.z_effective - data.z_obs)))
+                ]
+            ),
+        }
 
     # Point back at the simulation run that produced these fields.  This
     # summary is overwritten every run; the manifest it names is not, so an
@@ -776,6 +973,7 @@ def print_report(summary: Dict[str, Any]) -> None:
     print(f"\n{SEPARATOR}\n  PIPELINE SUMMARY\n{SEPARATOR}")
     print(f"  Box               : {sim['BOX_LEN_Mpc']:.0f} Mpc, "
           f"{sim['HII_DIM']}² × {sim['N_z']} cells")
+    print(f"  Estimator         : {summary.get('estimator', 'coeval')}")
     print(f"  Lightcone         : z = {sim['z_min']} → {sim['z_max']}  "
           f"(z_obs = {sim['z_obs']})")
     print(f"  <x_HI>            : {sim['mean_neutral_fraction']:.3f}")
@@ -799,6 +997,25 @@ def print_report(summary: Dict[str, Any]) -> None:
           f"{1.0 - ub['cosmic_variance_fraction']:.1%} noise coupling")
     print(f"    Total SNR       : {ub['total_snr_sigma']:.3g} σ  "
           f"({'detection' if ub['detection_above_5sigma'] else 'no detection'} at 5σ)")
+
+    if "subbands" in summary:
+        sub = summary["subbands"]
+        print(f"\n  Sub-bands ({sub['n_bands']}, lightcone estimator)")
+        print("    band   z_eff      B [MHz]   L_los [Mpc]   slices   SNR")
+        for index in range(sub["n_bands"]):
+            per_band = sub["total_snr_per_band"]
+            snr_text = (
+                f"{per_band[index]:.3g}" if per_band is not None else "--"
+            )
+            print(f"    {index:>4}   {sub['z_effective'][index]:.4f}   "
+                  f"{sub['bandwidth_MHz'][index]:>7.2f}   "
+                  f"{sub['los_length_Mpc'][index]:>11.1f}   "
+                  f"{sub['n_slices'][index]:>6}   {snr_text}")
+        if sub["combined_total_snr"] is not None:
+            print(f"    Combined SNR  : {sub['combined_total_snr']:.3g} σ "
+                  f"(quadrature over bands)")
+        print(f"    Budget above is band {sub['representative_z_eff']:.4f}, "
+              f"the one closest to z_obs")
 
     if "effective_galaxy_bias" in summary:
         bias = summary["effective_galaxy_bias"]
@@ -922,6 +1139,39 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--bandwidth", type=float, default=None, metavar="HZ",
         help="per-band bandwidth [Hz] (stored default: 8e6)",
     )
+    estimator_group = parser.add_argument_group(
+        "estimator (TODO.md P0)",
+        "Which power-spectrum formalism to use. 'auto' follows the stored "
+        "simulation's own `estimator` attribute, so the two halves of the "
+        "pipeline cannot silently disagree.",
+    )
+    estimator_group.add_argument(
+        "--estimator", default="auto", choices=("auto", "coeval", "lightcone"),
+        help="coeval: one FFT over the box, global mean, no taper (default "
+             "for data written before P0). lightcone: per-slice means, "
+             "Blackman-Harris taper, one spectrum per sub-band at its own "
+             "effective redshift and bandwidth.",
+    )
+    estimator_group.add_argument(
+        "--subband-bandwidth", type=float, default=None, metavar="HZ",
+        help="target per-band bandwidth for --estimator lightcone [Hz]; "
+             "defaults to the noise bandwidth, which is the point of P0.4",
+    )
+
+    smoke_group = parser.add_argument_group(
+        "smoke test",
+        "Pre-flight check: run every stage on a tiny configuration and assert "
+        "the outputs have the right shapes. Not a science run.",
+    )
+    smoke_group.add_argument(
+        "--smoke-test", action="store_true",
+        help="run the whole pipeline on the reduced configuration in "
+             "src/smoke_test.py, verify every stage's output shape, and print "
+             "a stage-by-stage report. Redirects --data/--products/--figdir/"
+             "--summary to outputs/smoke_test/ unless they are given "
+             "explicitly, so a real run's products are never overwritten.",
+    )
+
     parser.add_argument("--quiet", action="store_true",
                         help="suppress progress output")
 
@@ -967,11 +1217,45 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     quiet = args.quiet
     started = time.time()
 
+    # ── Smoke test ────────────────────────────────────────────────────────
+    # Redirect every output path into outputs/smoke_test/ unless the caller
+    # named one explicitly, so a pre-flight check cannot overwrite a real
+    # run's products.  Nothing here touches the production defaults.
+    smoke_report = None
+    if args.smoke_test:
+        from src.smoke_test import (
+            SMOKE_OUTPUT_DIR, SMOKE_TEST_OVERRIDES, SmokeReport,
+            check_figures, check_mcmc_chain, check_power_spectra,
+            check_simulation_output, check_summary, check_uncertainty_budget,
+            describe_overrides,
+        )
+
+        smoke_report = SmokeReport()
+        defaults = {
+            "data": DEFAULT_DATA, "products": DEFAULT_PRODUCTS,
+            "figdir": DEFAULT_FIGDIR, "summary": DEFAULT_SUMMARY,
+        }
+        for name, default in defaults.items():
+            if getattr(args, name) == default:
+                setattr(args, name, os.path.join(
+                    SMOKE_OUTPUT_DIR, os.path.basename(default)
+                ))
+        if args.max_halos == 0:
+            args.max_halos = SMOKE_TEST_OVERRIDES["max_halos"]["value"]
+
+        if not quiet:
+            print(describe_overrides())
+            print(f"  Outputs → {SMOKE_OUTPUT_DIR}/\n")
+
     plot_groups = resolve_plot_groups(args.plots)
     figures.apply_plot_style(dpi=args.dpi)
 
     # Catalogue-dependent work: halo/scaling/bias figures and the bias stage.
     needs_catalog = bool({"halos", "scaling", "euclid", "bias"} & set(plot_groups))
+    if args.smoke_test:
+        # A pre-flight check must exercise the halo catalogue even with
+        # --plots none, since that is one of the stages it exists to verify.
+        needs_catalog = True
 
     try:
         # ── Stage 1 ───────────────────────────────────────────────────────
@@ -979,6 +1263,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             mode=args.sim,
             data_path=args.data,
             script=args.sim_script,
+            smoke_test=args.smoke_test,
             quiet=quiet,
         )
 
@@ -998,22 +1283,56 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f"(1/{data.halo_sampling_factor:.0f} sampling)", quiet)
 
         # ── Stage 2 ───────────────────────────────────────────────────────
-        spectra, recomputed = power_spectra_stage(
+        # The estimator follows the stored simulation unless overridden: a
+        # lightcone sampled uniformly in redshift must not be analysed as if
+        # its slices were evenly spaced in comoving distance.
+        estimator = args.estimator
+        if estimator == "auto":
+            estimator = data.get_str("estimator", "coeval")
+        log(f"  Estimator: {estimator}"
+            + (" (from the stored simulation)" if args.estimator == "auto"
+               else " (--estimator)"), quiet)
+
+        noise_bandwidth = (
+            float(args.bandwidth) if args.bandwidth is not None
+            else data.get("bandwidth", 8e6)
+        )
+        subband_bandwidth = (
+            float(args.subband_bandwidth)
+            if args.subband_bandwidth is not None else noise_bandwidth
+        )
+
+        spectra, subbands, recomputed = power_spectra_stage(
             mode=args.analysis,
             data=data,
             products_path=args.products,
+            estimator=estimator,
+            subband_bandwidth=subband_bandwidth,
             quiet=quiet,
         )
-        budget = observational_stage(
-            data, spectra,
-            photoz_uncertainty=args.sigma_z,
-            wedge_buffer=args.wedge_buffer,
-            integration_time=args.integration_time,
-            bandwidth=args.bandwidth,
-            noise_model=args.noise_model,
-            mode_weighted=args.mode_weighted,
-            quiet=quiet,
-        )
+
+        band_budgets, combined_snr = None, None
+        if subbands is not None:
+            budget, band_budgets, combined_snr = subband_observational_stage(
+                data, subbands,
+                photoz_uncertainty=args.sigma_z,
+                wedge_buffer=args.wedge_buffer,
+                integration_time=args.integration_time,
+                noise_model=args.noise_model,
+                mode_weighted=args.mode_weighted,
+                quiet=quiet,
+            )
+        else:
+            budget = observational_stage(
+                data, spectra,
+                photoz_uncertainty=args.sigma_z,
+                wedge_buffer=args.wedge_buffer,
+                integration_time=args.integration_time,
+                bandwidth=args.bandwidth,
+                noise_model=args.noise_model,
+                mode_weighted=args.mode_weighted,
+                quiet=quiet,
+            )
         save_uncertainty_budget(args.products, budget)
         log(f"  Uncertainty budget cached → {args.products}", quiet)
 
@@ -1052,6 +1371,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             figure_paths=figure_paths,
             ran_simulation=ran_simulation,
             recomputed_spectra=recomputed,
+            estimator=estimator,
+            subbands=subbands,
+            band_budgets=band_budgets,
+            combined_snr=combined_snr,
         )
         write_summary(summary, args.summary)
 
@@ -1060,8 +1383,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"  Summary written   : {args.summary}")
             print(f"  Elapsed           : {time.time() - started:.1f} s")
 
+        # ── Smoke-test verification ───────────────────────────────────────
+        # Shapes, dtypes and finiteness at every stage — an explicit check
+        # rather than "the run did not crash".
+        if smoke_report is not None:
+            n_perp = int(data.get("n_bins_perp", 20))
+            n_parallel = int(data.get("n_bins_parallel", 20))
+
+            check_simulation_output(
+                data,
+                expected_hii_dim=int(data.HII_DIM),
+                expected_n_z=int(data.N_z),
+                report=smoke_report,
+            )
+            check_power_spectra(
+                spectra, n_perp, n_parallel,
+                report=smoke_report, subbands=subbands,
+            )
+            check_uncertainty_budget(
+                budget, n_perp, n_parallel, report=smoke_report,
+            )
+            check_figures(figure_paths, report=smoke_report)
+            check_summary(summary, report=smoke_report)
+            check_mcmc_chain(report=smoke_report)
+
+            print("\n" + smoke_report.render())
+            if not smoke_report.passed:
+                return 1
+
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"\nERROR: {exc}", file=sys.stderr)
+        if smoke_report is not None:
+            smoke_report.add("pipeline", False, f"aborted: {exc}")
+            print("\n" + smoke_report.render())
         return 1
 
     return 0

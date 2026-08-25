@@ -54,6 +54,14 @@ __all__ = [
     "T_STAR_DEFAULT",
     "compute_cylindrical_cross_power",
     "compute_all_power_spectra",
+    "ESTIMATOR_MODES",
+    "MEAN_SUBTRACTION_MODES",
+    "subtract_field_mean",
+    "blackman_harris_taper",
+    "subband_index_ranges",
+    "compute_subband_power_spectra",
+    "combine_band_snr",
+    "SubbandGeometry",
     "horizon_wedge_slope",
     "fov_wedge_slope",
     "foreground_wedge_mask",
@@ -248,6 +256,7 @@ def compute_cylindrical_cross_power(
     box_len_los: float,
     n_bins_perp: int = 20,
     n_bins_parallel: int = 20,
+    taper: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     2D cylindrical cross-power spectrum P(k_perp, k_parallel) of a lightcone box.
@@ -266,6 +275,12 @@ def compute_cylindrical_cross_power(
         Comoving line-of-sight length [Mpc].
     n_bins_perp, n_bins_parallel : int, optional
         Number of log-spaced bins along k_perp and k_parallel.
+    taper : ndarray, optional
+        Line-of-sight window of length ``N_z``, applied to both fields before
+        the transform and divided back out of the power as ``<w^2>`` so the
+        amplitude is preserved.  ``None`` (the default) is the bare FFT, which
+        is what every result before the sub-band estimator used.  See
+        :func:`blackman_harris_taper`.
 
     Returns
     -------
@@ -292,6 +307,27 @@ def compute_cylindrical_cross_power(
     n_perp = field_a.shape[0]   # transverse cells
     n_los = field_a.shape[2]    # LOS cells
 
+    # ── Optional line-of-sight taper ──────────────────────────────────────
+    # Applied to both fields, so the measured power carries a factor <w^2>
+    # that is divided back out below.  This is the noise-equivalent-bandwidth
+    # normalisation: it restores the amplitude of a statistically homogeneous
+    # field exactly, and leaves the bare-FFT path bit-identical when
+    # ``taper is None``.
+    taper_normalisation = 1.0
+    if taper is not None:
+        taper = np.asarray(taper, dtype=float)
+        if taper.shape != (n_los,):
+            raise ValueError(
+                f"taper length {taper.shape} does not match the "
+                f"line-of-sight axis ({n_los},)"
+            )
+        taper_normalisation = float(np.mean(taper ** 2))
+        if taper_normalisation <= 0.0:
+            raise ValueError("taper has zero power; cannot normalise")
+        window = taper[np.newaxis, np.newaxis, :]
+        field_a = field_a * window
+        field_b = field_b * window
+
     dx = box_len_perp / n_perp   # transverse cell size [Mpc]
     dz = box_len_los / n_los     # LOS cell size [Mpc]
     volume = box_len_perp ** 2 * box_len_los
@@ -300,7 +336,7 @@ def compute_cylindrical_cross_power(
     ft_factor = dx * dx * dz
     fourier_a = np.fft.fftn(field_a) * ft_factor
     fourier_b = np.fft.fftn(field_b) * ft_factor
-    power_3d = (fourier_a * np.conj(fourier_b)).real / volume
+    power_3d = (fourier_a * np.conj(fourier_b)).real / (volume * taper_normalisation)
 
     # ── Wavenumber grids ──────────────────────────────────────────────────
     kx = np.fft.fftfreq(n_perp, d=dx) * 2 * np.pi
@@ -360,12 +396,18 @@ def compute_all_power_spectra(
     box_len_los: float,
     n_bins_perp: int = 20,
     n_bins_parallel: int = 20,
+    mean_subtraction: str = "global",
+    taper: Optional[np.ndarray] = None,
 ) -> PowerSpectra:
     """
     Compute the 21 cm auto-, galaxy auto-, and cross-power spectra.
 
     The 21 cm field is converted to fluctuations by subtracting its mean; the
     galaxy field is already an overdensity.
+
+    With ``mean_subtraction="per_slice"`` both fields have their per-slice
+    transverse mean removed instead, which is what a lightcone spanning a
+    non-negligible redshift range requires — see :func:`subtract_field_mean`.
 
     Parameters
     ----------
@@ -377,25 +419,39 @@ def compute_all_power_spectra(
         Comoving transverse and line-of-sight box lengths [Mpc].
     n_bins_perp, n_bins_parallel : int, optional
         Number of log-spaced ``(k_perp, k_parallel)`` bins.
+    mean_subtraction : {'global', 'per_slice'}, optional
+        How the mean is removed before transforming.  ``'global'`` (default)
+        subtracts a single scalar from the 21 cm field and leaves the galaxy
+        overdensity untouched, reproducing every result this pipeline produced
+        before the lightcone estimator existed.  ``'per_slice'`` subtracts the
+        transverse mean of each line-of-sight slice from **both** fields.
+    taper : ndarray, optional
+        Line-of-sight window passed through to
+        :func:`compute_cylindrical_cross_power`.
 
     Returns
     -------
     PowerSpectra
         The three spectra on a shared k-grid, plus the mode counts.
     """
-    t21_fluctuations = brightness_temp_field - brightness_temp_field.mean()
+    t21_fluctuations = subtract_field_mean(brightness_temp_field, mean_subtraction)
+    galaxy_field = (
+        galaxy_overdensity
+        if mean_subtraction == "global"
+        else subtract_field_mean(galaxy_overdensity, mean_subtraction)
+    )
 
     k_perp, k_parallel, p_21, mode_counts = compute_cylindrical_cross_power(
         t21_fluctuations, t21_fluctuations,
-        box_len_perp, box_len_los, n_bins_perp, n_bins_parallel,
+        box_len_perp, box_len_los, n_bins_perp, n_bins_parallel, taper,
     )
     _, _, p_gal, _ = compute_cylindrical_cross_power(
-        galaxy_overdensity, galaxy_overdensity,
-        box_len_perp, box_len_los, n_bins_perp, n_bins_parallel,
+        galaxy_field, galaxy_field,
+        box_len_perp, box_len_los, n_bins_perp, n_bins_parallel, taper,
     )
     _, _, p_cross, _ = compute_cylindrical_cross_power(
-        t21_fluctuations, galaxy_overdensity,
-        box_len_perp, box_len_los, n_bins_perp, n_bins_parallel,
+        t21_fluctuations, galaxy_field,
+        box_len_perp, box_len_los, n_bins_perp, n_bins_parallel, taper,
     )
 
     return PowerSpectra(
@@ -407,6 +463,456 @@ def compute_all_power_spectra(
         mode_counts=mode_counts,
     )
 
+
+# ===========================================================================
+# 2b  Lightcone estimator — per-slice means, LOS taper, sub-bands
+# ===========================================================================
+#
+# The estimator above was inherited from a *coeval* notebook and assumes the
+# box is statistically homogeneous along the line of sight.  That holds for a
+# quasi-coeval slab and fails for a true lightcone, in four ways that
+# `TODO.md` P0 enumerates:
+#
+#   P0.1  slices uniform in redshift are not uniform in comoving distance,
+#         so the FFT mis-assigns k_parallel        -> run_simulation.py
+#   P0.2  a single global mean leaves a monotonic LOS ramp that aliases into
+#         low k_parallel                            -> subtract_field_mean
+#   P0.3  one FFT over a wide band returns a redshift-averaged spectrum with
+#         an ill-defined effective redshift         -> compute_subband_power_spectra
+#   P0.4  the power spectrum and the noise are computed over different
+#         bandwidths                                -> compute_subband_power_spectra
+#
+# Everything here is opt-in.  With the defaults (`mean_subtraction="global"`,
+# `taper=None`, no sub-banding) the pipeline reproduces its previous numbers
+# bit for bit; `ESTIMATOR_MODES` names the two formalisms.
+
+#: The two estimator formalisms.  ``"coeval"`` is the historical one: global
+#: mean subtraction, no taper, a single FFT over the whole box.  ``"lightcone"``
+#: applies P0.2-P0.4 — per-slice means, a Blackman-Harris taper, and one
+#: spectrum per sub-band at its own effective redshift.
+ESTIMATOR_MODES: Tuple[str, ...] = ("coeval", "lightcone")
+
+#: How the mean is removed before transforming.  See :func:`subtract_field_mean`.
+MEAN_SUBTRACTION_MODES: Tuple[str, ...] = ("global", "per_slice")
+
+
+def subtract_field_mean(field: np.ndarray, mode: str = "global") -> np.ndarray:
+    """
+    Remove the mean of a lightcone field.
+
+    Parameters
+    ----------
+    field : ndarray
+        Lightcone of shape ``(N, N, N_z)``; the line of sight is the last axis.
+    mode : {'global', 'per_slice'}, optional
+        ``'global'`` subtracts one scalar, the mean over the whole box.
+        ``'per_slice'`` subtracts the transverse mean of each line-of-sight
+        slice, ``field[:, :, i] - <field[:, :, i]>``.
+
+    Returns
+    -------
+    ndarray
+        Fluctuations about the chosen mean, same shape as ``field``.
+
+    Raises
+    ------
+    ValueError
+        If ``mode`` is not one of :data:`MEAN_SUBTRACTION_MODES`, or the field
+        is not 3D.
+
+    Notes
+    -----
+    This is `TODO.md` P0.2.  Over a lightcone the mean brightness temperature
+    evolves strongly with redshift, so a single global scalar leaves a
+    monotonic ramp along the line of sight, which is not signal.  Removing the
+    per-slice mean removes it by construction, at the cost of also removing the
+    genuine ``k_parallel = 0`` mode — which the wedge excises anyway.
+
+    **How much this moves the binned spectra: measured, and less than
+    `TODO.md` claims.**  A ramp that is uniform across the sky has ~99 % of its
+    power at ``k_perp = 0``, and
+    :func:`compute_cylindrical_cross_power` bins from ``0.5 dk_perp`` upwards,
+    so that column is discarded before any binning happens.  On a field whose
+    only contamination is such a ramp the two modes agree to floating-point
+    precision (``tests/test_analysis.py``).  The operation is still correct,
+    and it matters for anything that does use ``k_perp = 0`` — real-space
+    fields, figures, and any future estimator that keeps the column — but it is
+    not by itself the fix for low-``k_parallel`` contamination.
+
+    What genuinely couples the redshift evolution into non-zero ``k_perp`` is
+    that ``delta_T_b = T_0(z) [1 + delta(x)]``: an evolving mean *modulates*
+    the fluctuation amplitude across the band.  Removing a per-slice mean does
+    not undo a per-slice gain; per-slice **normalisation** would.  That is a
+    separate change and is deliberately not made here.
+
+    The galaxy overdensity is built with its own global normalisation
+    (``SFR/<SFR> - 1``), so it carries the same ramp and needs the same
+    treatment; :func:`compute_all_power_spectra` applies this to both fields
+    when ``mean_subtraction="per_slice"``.
+
+    Examples
+    --------
+    >>> box = np.ones((2, 2, 3)) * np.arange(3)      # a pure LOS ramp
+    >>> np.allclose(subtract_field_mean(box, "per_slice"), 0.0)
+    True
+    """
+    if mode not in MEAN_SUBTRACTION_MODES:
+        raise ValueError(
+            f"mode must be one of {MEAN_SUBTRACTION_MODES}, got {mode!r}"
+        )
+    field = np.asarray(field, dtype=float)
+    if field.ndim != 3:
+        raise ValueError(f"expected a 3D lightcone, got shape {field.shape}")
+
+    if mode == "global":
+        return field - field.mean()
+    return field - field.mean(axis=(0, 1), keepdims=True)
+
+
+def blackman_harris_taper(n_slices: int) -> np.ndarray:
+    """
+    Four-term Blackman-Harris window for the line-of-sight axis.
+
+    Parameters
+    ----------
+    n_slices : int
+        Length of the line-of-sight axis.  Must be at least 2.
+
+    Returns
+    -------
+    ndarray
+        The window, shape ``(n_slices,)``, peaking at 1.
+
+    Raises
+    ------
+    ValueError
+        If ``n_slices < 2``.
+
+    Notes
+    -----
+    A band of finite extent is a top-hat in frequency, and a bare FFT of it
+    leaks power from the bright low-``k_parallel`` modes across the whole
+    axis — the ``k_parallel^-1.5`` leakage that ``src/foregrounds.py``
+    measures.  The four-term Blackman-Harris window has -92 dB sidelobes and
+    is the standard choice in 21 cm power-spectrum estimation for that reason.
+
+    The window is *not* normalised here; the estimator divides the measured
+    power by ``<w^2>`` so amplitudes are preserved
+    (:func:`compute_cylindrical_cross_power`).  The cost is resolution: the
+    effective number of independent line-of-sight modes falls, which is why
+    tapering is applied per sub-band rather than to the whole box.
+
+    References
+    ----------
+    Harris, F. J. (1978), Proc. IEEE 66, 51 — window functions for harmonic
+    analysis.  Applied to 21 cm delay spectra by Parsons et al. (2012a).
+    """
+    if n_slices < 2:
+        raise ValueError(f"n_slices must be >= 2, got {n_slices}")
+
+    a = (0.35875, 0.48829, 0.14128, 0.01168)
+    n = np.arange(n_slices)
+    x = 2 * np.pi * n / (n_slices - 1)
+    return a[0] - a[1] * np.cos(x) + a[2] * np.cos(2 * x) - a[3] * np.cos(3 * x)
+
+
+@dataclass
+class SubbandGeometry:
+    """
+    Where each sub-band sits along the lightcone.
+
+    Attributes
+    ----------
+    index_ranges : ndarray
+        ``(n_bands, 2)`` integer ``[start, stop)`` slice indices.
+    z_effective : ndarray
+        Effective redshift of each band, from its mean observed frequency.
+    z_min, z_max : ndarray
+        Redshift limits of each band.
+    frequency_min_hz, frequency_max_hz : ndarray
+        Observed frequency limits of each band [Hz].
+    bandwidth_hz : ndarray
+        Frequency span actually covered by each band [Hz].  This is the value
+        the noise model must use (`TODO.md` P0.4).
+    los_length_mpc : ndarray
+        Comoving line-of-sight extent of each band [Mpc].
+    n_slices : ndarray
+        Number of lightcone slices in each band.
+    """
+
+    index_ranges: np.ndarray
+    z_effective: np.ndarray
+    z_min: np.ndarray
+    z_max: np.ndarray
+    frequency_min_hz: np.ndarray
+    frequency_max_hz: np.ndarray
+    bandwidth_hz: np.ndarray
+    los_length_mpc: np.ndarray
+    n_slices: np.ndarray
+
+    @property
+    def n_bands(self) -> int:
+        """Number of sub-bands."""
+        return int(self.index_ranges.shape[0])
+
+
+def subband_index_ranges(
+    n_slices: int,
+    frequency_span_hz: float,
+    bandwidth_hz: float = 8e6,
+    min_slices_per_band: int = 8,
+) -> np.ndarray:
+    """
+    Split a line-of-sight axis into contiguous sub-bands of at most one bandwidth.
+
+    Parameters
+    ----------
+    n_slices : int
+        Length of the line-of-sight axis.
+    frequency_span_hz : float
+        Total observed-frequency span of the lightcone [Hz].
+    bandwidth_hz : float, optional
+        Target per-band bandwidth [Hz] — the one the noise model assumes.
+    min_slices_per_band : int, optional
+        Refuse to split so finely that a band cannot support a useful
+        ``k_parallel`` axis.  The band count is reduced until every band has
+        at least this many slices.
+
+    Returns
+    -------
+    ndarray
+        ``(n_bands, 2)`` array of ``[start, stop)`` indices covering the axis
+        with no gaps and no overlap.
+
+    Raises
+    ------
+    ValueError
+        If any argument is non-positive.
+
+    Notes
+    -----
+    The number of bands is ``ceil(span / bandwidth)``, so each band spans
+    ``span / n_bands <= bandwidth``.  Slices are divided as evenly as
+    possible by index rather than by frequency: with comoving-uniform sampling
+    the two differ by well under a cell, and an even split keeps every band's
+    ``k_parallel`` grid identical, which is what makes the per-band spectra
+    stackable.
+
+    A lightcone narrower than one bandwidth returns a single band — the
+    sub-band estimator then reduces to the whole-box one, with the taper still
+    applied.
+    """
+    if n_slices < 1:
+        raise ValueError(f"n_slices must be >= 1, got {n_slices}")
+    if frequency_span_hz <= 0:
+        raise ValueError(
+            f"frequency_span_hz must be positive, got {frequency_span_hz}"
+        )
+    if bandwidth_hz <= 0:
+        raise ValueError(f"bandwidth_hz must be positive, got {bandwidth_hz}")
+    if min_slices_per_band < 1:
+        raise ValueError(
+            f"min_slices_per_band must be >= 1, got {min_slices_per_band}"
+        )
+
+    n_bands = int(np.ceil(frequency_span_hz / bandwidth_hz))
+    n_bands = max(1, min(n_bands, n_slices // max(min_slices_per_band, 1)))
+    n_bands = max(1, n_bands)
+
+    edges = np.linspace(0, n_slices, n_bands + 1).astype(int)
+    return np.column_stack((edges[:-1], edges[1:]))
+
+
+def compute_subband_power_spectra(
+    brightness_temp_field: np.ndarray,
+    galaxy_overdensity: np.ndarray,
+    lc_redshifts: np.ndarray,
+    lc_dist_Mpc: np.ndarray,
+    box_len_perp: float,
+    bandwidth_hz: float = 8e6,
+    n_bins_perp: int = 20,
+    n_bins_parallel: int = 20,
+    mean_subtraction: str = "per_slice",
+    taper: bool = True,
+    min_slices_per_band: int = 8,
+    f_21_hz: float = 1420.405e6,
+) -> Tuple[list, SubbandGeometry]:
+    """
+    Power spectra of a lightcone, one per frequency sub-band.
+
+    Splits the line of sight into bands of at most ``bandwidth_hz``, removes
+    the per-slice mean, applies a Blackman-Harris taper within each band, and
+    measures the three spectra of that band on its own comoving extent.
+
+    Parameters
+    ----------
+    brightness_temp_field, galaxy_overdensity : ndarray
+        Lightcone fields of shape ``(N, N, N_z)``.
+    lc_redshifts : ndarray
+        Redshift of each slice, shape ``(N_z,)``.
+    lc_dist_Mpc : ndarray
+        Comoving distance to each slice [Mpc], shape ``(N_z,)``.
+    box_len_perp : float
+        Transverse box length [Mpc].
+    bandwidth_hz : float, optional
+        Target per-band bandwidth [Hz].  Match it to the noise model's.
+    n_bins_perp, n_bins_parallel : int, optional
+        Binning, applied identically in every band.
+    mean_subtraction : {'per_slice', 'global'}, optional
+        Passed to :func:`compute_all_power_spectra`.  ``'per_slice'`` is the
+        point of this estimator; ``'global'`` is available for isolating the
+        effect of one P0 item at a time.
+    taper : bool, optional
+        Apply the Blackman-Harris window along each band's line of sight.
+    min_slices_per_band : int, optional
+        Floor on the slices per band; see :func:`subband_index_ranges`.
+    f_21_hz : float, optional
+        21 cm rest frequency [Hz].
+
+    Returns
+    -------
+    list of PowerSpectra
+        One entry per band, in lightcone order.
+    SubbandGeometry
+        Effective redshift, frequency limits, bandwidth and comoving extent of
+        each band — everything the per-band uncertainty budget needs.
+
+    Raises
+    ------
+    ValueError
+        If the fields, redshifts and distances disagree in length, or the
+        lightcone has fewer than two slices.
+
+    Notes
+    -----
+    This is `TODO.md` P0.3 and P0.4 together.  One FFT over a wide lightcone
+    returns a redshift-*averaged* spectrum whose effective redshift is
+    ill-defined, and mixes a band of one width with a noise model of another.
+    Measuring per band fixes both: each band has its own ``z_eff``, its own
+    ``k_parallel`` grid from its own comoving extent, and its own bandwidth to
+    hand to :func:`compute_uncertainty_budget`.
+
+    The effective redshift is taken from the band's mean *observed frequency*,
+    ``z_eff = f_21 / <nu> - 1``, rather than the mean redshift: the estimator
+    works in frequency, and the two differ by ~0.2 % over an 8 MHz band at
+    z = 7.
+
+    Bands are combined afterwards with :func:`combine_band_snr`, not here —
+    the spectra themselves are reported per band, since that is the only form
+    in which they have a well-defined redshift.
+    """
+    brightness_temp_field = np.asarray(brightness_temp_field, dtype=float)
+    galaxy_overdensity = np.asarray(galaxy_overdensity, dtype=float)
+    lc_redshifts = np.asarray(lc_redshifts, dtype=float).ravel()
+    lc_dist_Mpc = np.asarray(lc_dist_Mpc, dtype=float).ravel()
+
+    if brightness_temp_field.shape != galaxy_overdensity.shape:
+        raise ValueError(
+            f"field shapes differ: {brightness_temp_field.shape} vs "
+            f"{galaxy_overdensity.shape}"
+        )
+    n_los = brightness_temp_field.shape[2]
+    if n_los < 2:
+        raise ValueError(f"need at least 2 lightcone slices, got {n_los}")
+    if lc_redshifts.size != n_los or lc_dist_Mpc.size != n_los:
+        raise ValueError(
+            f"lc_redshifts ({lc_redshifts.size}) and lc_dist_Mpc "
+            f"({lc_dist_Mpc.size}) must match the LOS axis ({n_los})"
+        )
+
+    frequencies = f_21_hz / (1.0 + lc_redshifts)
+    frequency_span = float(np.abs(frequencies[-1] - frequencies[0]))
+
+    ranges = subband_index_ranges(
+        n_slices=n_los,
+        frequency_span_hz=max(frequency_span, np.finfo(float).tiny),
+        bandwidth_hz=bandwidth_hz,
+        min_slices_per_band=min_slices_per_band,
+    )
+
+    spectra_per_band = []
+    z_eff, z_lo, z_hi = [], [], []
+    nu_lo, nu_hi, band_width, los_length, slice_count = [], [], [], [], []
+
+    for start, stop in ranges:
+        n_band = int(stop - start)
+        band_t21 = brightness_temp_field[:, :, start:stop]
+        band_gal = galaxy_overdensity[:, :, start:stop]
+        band_dist = lc_dist_Mpc[start:stop]
+        band_nu = frequencies[start:stop]
+
+        # Comoving extent: the slice spacing times the number of slices, so a
+        # band of n cells spans n * dz_cell rather than the distance between
+        # its first and last cell *centres*.
+        if n_band > 1:
+            cell = float(np.mean(np.diff(band_dist)))
+        else:                                       # pragma: no cover - guarded
+            cell = float(np.mean(np.diff(lc_dist_Mpc)))
+        length = abs(cell) * n_band
+
+        window = blackman_harris_taper(n_band) if taper else None
+
+        spectra_per_band.append(
+            compute_all_power_spectra(
+                brightness_temp_field=band_t21,
+                galaxy_overdensity=band_gal,
+                box_len_perp=box_len_perp,
+                box_len_los=length,
+                n_bins_perp=n_bins_perp,
+                n_bins_parallel=n_bins_parallel,
+                mean_subtraction=mean_subtraction,
+                taper=window,
+            )
+        )
+
+        mean_nu = float(np.mean(band_nu))
+        z_eff.append(f_21_hz / mean_nu - 1.0)
+        band_z = lc_redshifts[start:stop]
+        z_lo.append(float(band_z.min()))
+        z_hi.append(float(band_z.max()))
+        nu_lo.append(float(band_nu.min()))
+        nu_hi.append(float(band_nu.max()))
+        band_width.append(float(np.abs(band_nu.max() - band_nu.min())))
+        los_length.append(length)
+        slice_count.append(n_band)
+
+    geometry = SubbandGeometry(
+        index_ranges=np.asarray(ranges, dtype=int),
+        z_effective=np.asarray(z_eff, dtype=float),
+        z_min=np.asarray(z_lo, dtype=float),
+        z_max=np.asarray(z_hi, dtype=float),
+        frequency_min_hz=np.asarray(nu_lo, dtype=float),
+        frequency_max_hz=np.asarray(nu_hi, dtype=float),
+        bandwidth_hz=np.asarray(band_width, dtype=float),
+        los_length_mpc=np.asarray(los_length, dtype=float),
+        n_slices=np.asarray(slice_count, dtype=int),
+    )
+    return spectra_per_band, geometry
+
+
+def combine_band_snr(band_totals: np.ndarray) -> float:
+    """
+    Combine per-band total SNRs into one detection significance.
+
+    Parameters
+    ----------
+    band_totals : array_like
+        Total SNR of each sub-band.  ``NaN`` entries are ignored.
+
+    Returns
+    -------
+    float
+        ``sqrt(sum(SNR_band^2))``.
+
+    Notes
+    -----
+    Sub-bands sample disjoint frequency ranges and therefore disjoint comoving
+    volumes, so their measurements are independent and add in quadrature —
+    the same rule the per-bin sum inside a band already uses
+    (:func:`total_snr`).
+    """
+    totals = np.asarray(band_totals, dtype=float)
+    return float(np.sqrt(np.nansum(totals ** 2)))
 
 # ===========================================================================
 # 3  Foreground wedge geometry

@@ -12,12 +12,13 @@ import json
 import os
 import sys
 
+import h5py
 import numpy as np
 import pytest
 
 import run_pipeline
 
-from conftest import write_tiny_simulation
+from conftest import TINY_N_Z, write_tiny_simulation
 
 
 @pytest.fixture()
@@ -465,3 +466,81 @@ def test_defaults_are_unchanged_by_the_new_options(workspace) -> None:
     assert budget["noise_model"] == "scaling"
     assert budget["mode_weighted"] is False
     assert budget["P_noise_21cm"] == pytest.approx(3.749, rel=1e-3)
+
+
+# ===========================================================================
+#  Estimator toggle — TODO.md P0
+# ===========================================================================
+
+def test_estimator_defaults_to_coeval(workspace) -> None:
+    """Data written before P0 has no `estimator` attribute; assume coeval."""
+    assert run_pipeline.main(base_args(workspace, "--plots", "none")) == 0
+
+    summary = json.loads(open(workspace["summary"]).read())
+    assert summary["estimator"] == "coeval"
+    assert "subbands" not in summary
+
+    with h5py.File(workspace["products"], "r") as f:
+        assert "subbands" not in f
+
+
+def test_lightcone_estimator_runs_end_to_end(workspace) -> None:
+    """The P0 formalism produces a sub-band cache and a per-band summary."""
+    assert run_pipeline.main(
+        base_args(workspace, "--plots", "none", "--estimator", "lightcone")
+    ) == 0
+
+    summary = json.loads(open(workspace["summary"]).read())
+    assert summary["estimator"] == "lightcone"
+
+    sub = summary["subbands"]
+    assert sub["n_bands"] >= 1
+    for key in ("z_effective", "bandwidth_MHz", "los_length_Mpc",
+                "n_slices", "total_snr_per_band"):
+        assert len(sub[key]) == sub["n_bands"]
+    assert sub["combined_total_snr"] >= 0.0
+    # Bands tile the line of sight without losing a slice.
+    assert sum(sub["n_slices"]) == TINY_N_Z
+
+    with h5py.File(workspace["products"], "r") as f:
+        assert f.attrs["estimator"] == "lightcone"
+        assert int(f["subbands"].attrs["n_bands"]) == sub["n_bands"]
+
+
+def test_lightcone_estimator_changes_nothing_when_not_requested(workspace) -> None:
+    """Every P0 addition is opt-in: the default totals must not move."""
+    assert run_pipeline.main(base_args(workspace, "--plots", "none")) == 0
+    baseline = json.loads(open(workspace["summary"]).read())
+
+    assert run_pipeline.main(
+        base_args(workspace, "--plots", "none", "--analysis", "force")
+    ) == 0
+    repeat = json.loads(open(workspace["summary"]).read())
+
+    assert (baseline["uncertainty_budget"]["total_snr_sigma"]
+            == repeat["uncertainty_budget"]["total_snr_sigma"])
+    assert repeat["estimator"] == "coeval"
+
+
+def test_estimator_follows_the_stored_simulation(workspace) -> None:
+    """`--estimator auto` reads the attribute run_simulation.py wrote."""
+    with h5py.File(workspace["data"], "a") as f:
+        f.attrs["estimator"] = "lightcone"
+
+    assert run_pipeline.main(base_args(workspace, "--plots", "none")) == 0
+    summary = json.loads(open(workspace["summary"]).read())
+    assert summary["estimator"] == "lightcone"
+    assert "subbands" in summary
+
+
+def test_explicit_estimator_overrides_the_stored_attribute(workspace) -> None:
+    """An explicit flag beats the file, for re-analysing an existing run."""
+    with h5py.File(workspace["data"], "a") as f:
+        f.attrs["estimator"] = "lightcone"
+
+    assert run_pipeline.main(
+        base_args(workspace, "--plots", "none", "--estimator", "coeval")
+    ) == 0
+    summary = json.loads(open(workspace["summary"]).read())
+    assert summary["estimator"] == "coeval"
+    assert "subbands" not in summary

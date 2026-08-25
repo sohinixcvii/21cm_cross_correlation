@@ -31,6 +31,7 @@ References
     Euclid Collaboration (2022) — arXiv:2108.01201
 """
 
+import argparse
 import gc
 import os
 import sys
@@ -97,8 +98,54 @@ except ImportError:
 
 
 # ===========================================================================
+#  Command line
+# ===========================================================================
+# The configuration block below is the single source of truth for a real run
+# and takes no arguments, by design.  The one flag here does not change any of
+# it: `--smoke-test` swaps in a separate, tiny configuration *after* the block,
+# so the production values stay exactly as written and exactly as documented.
+
+def _parse_args(argv=None):
+    """
+    Parse the simulation script's only command-line option.
+
+    Parameters
+    ----------
+    argv : sequence of str, optional
+        Argument list; defaults to ``sys.argv[1:]``.
+
+    Returns
+    -------
+    argparse.Namespace
+        With a single ``smoke_test`` boolean.
+    """
+    parser = argparse.ArgumentParser(
+        description=(
+            "21cmFAST lightcone + halo catalogue + galaxy field. "
+            "Simulation parameters are set in the configuration block, not here."
+        )
+    )
+    parser.add_argument(
+        "--smoke-test", action="store_true",
+        help="run a tiny end-to-end configuration to verify every stage "
+             "executes and produces correctly-shaped output. NOT a science "
+             "run: see src/smoke_test.py. Writes to outputs/smoke_test/.",
+    )
+    return parser.parse_args(argv)
+
+
+_ARGS = _parse_args()
+SMOKE_TEST = bool(_ARGS.smoke_test)
+
+
+# ===========================================================================
 #  ★ CONFIGURATION — ALL USER-ADJUSTABLE PARAMETERS ★
 #  Edit values in this section only. All subsequent code reads from here.
+#
+#  These are the production values. They are documented in README.md,
+#  docs/HPC.md §13 and docs/simulation_spec.md, and --smoke-test does not
+#  edit them — it reassigns a handful of names in the clearly-marked block
+#  immediately after the end of this section.
 # ===========================================================================
 
 # ---------------------------------------------------------------------------
@@ -251,6 +298,39 @@ n_bins_perp     = 20
 n_bins_parallel = 20
 
 # ---------------------------------------------------------------------------
+#  Estimator formalism  (TODO.md P0)
+# ---------------------------------------------------------------------------
+# "coeval" (default) — the historical formalism, valid for the quasi-coeval
+#     slab this pipeline has always run: lightcone slices spaced uniformly in
+#     *redshift*, and a single global mean removed from each field.  Every
+#     result produced before P0 landed used this, and it reproduces them
+#     exactly.
+#
+# "lightcone" — the P0 formalism, required once Delta z is wide enough that
+#     the box evolves along the line of sight:
+#       P0.1  slices spaced uniformly in *comoving distance*, so the FFT does
+#             not mis-assign k_parallel  (set here, in the lightconer)
+#       P0.2  per-slice mean subtraction, so the LOS ramp in <T_b> and <SFR>
+#             does not alias into low k_parallel  (set here for delta_gal;
+#             src/analysis.py does the same for delta_T_b)
+#       P0.3  one power spectrum per frequency sub-band, each at its own
+#             effective redshift        (analysis stage)
+#       P0.4  the sub-band width matched to the noise bandwidth
+#                                        (analysis stage)
+#
+# The analysis stage reads `estimator` back from the HDF5 and defaults to it,
+# so the two halves cannot silently disagree; `run_pipeline.py --estimator`
+# overrides it for a cached-spectra re-run.
+ESTIMATOR = "coeval"          # coeval | lightcone
+
+if ESTIMATOR not in ("coeval", "lightcone"):
+    raise ValueError(f"ESTIMATOR must be 'coeval' or 'lightcone', got {ESTIMATOR!r}")
+
+# Both follow from ESTIMATOR; override individually to isolate one P0 item.
+LIGHTCONE_SAMPLING      = "comoving" if ESTIMATOR == "lightcone" else "redshift"
+GALAXY_MEAN_SUBTRACTION = "per_slice" if ESTIMATOR == "lightcone" else "global"
+
+# ---------------------------------------------------------------------------
 #  Reproducibility
 # ---------------------------------------------------------------------------
 # 21cmFAST's initial-conditions seed.  Recorded in the run manifest and the
@@ -286,6 +366,38 @@ RUN_DIR     = os.path.join(OUTPUT_DIR, "runs")   # per-run parameter manifests
 # ===========================================================================
 #  End of configuration
 # ===========================================================================
+
+
+# ===========================================================================
+#  ⚠ SMOKE-TEST OVERRIDES — only active with --smoke-test ⚠
+# ===========================================================================
+# Nothing below runs unless the flag is set.  It reassigns the grid, the LOS
+# slice floor, the k-binning and the output paths to values chosen purely to
+# make the pipeline finish in seconds.  They are not science values and are
+# never written into the configuration block above; they live in
+# src/smoke_test.py with the production value each one stands in for.
+#
+# The output directory changes too, so a smoke run cannot overwrite a real
+# run's lightcone_data.h5.
+
+if SMOKE_TEST:
+    from src.smoke_test import (
+        SMOKE_OUTPUT_DIR,
+        describe_overrides,
+        override as _smoke_override,
+    )
+
+    HII_DIM         = _smoke_override("HII_DIM", HII_DIM)
+    BOX_LEN         = _smoke_override("BOX_LEN", BOX_LEN)
+    DIM             = _smoke_override("DIM", DIM)
+    n_bins_perp     = _smoke_override("n_bins_perp", n_bins_perp)
+    n_bins_parallel = _smoke_override("n_bins_parallel", n_bins_parallel)
+
+    OUTPUT_DIR  = SMOKE_OUTPUT_DIR
+    OUTPUT_FILE = os.path.join(OUTPUT_DIR, "lightcone_data.h5")
+    RUN_DIR     = os.path.join(OUTPUT_DIR, "runs")
+
+    print("\n" + describe_overrides() + "\n")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -328,6 +440,9 @@ z_obs = 0.5 * (z_min + z_max)
 # Normally matched to the transverse cell size; override via minimum_los_slices
 # for test runs where the z-range implies fewer natural slices.
 minimum_los_slices = 100
+if SMOKE_TEST:                       # see the override block above
+    from src.smoke_test import override as _smoke_override
+    minimum_los_slices = _smoke_override("minimum_los_slices", minimum_los_slices)
 N_z = max(int(round(L_los / cell_size)), minimum_los_slices)
 
 # Redshift and distance for each LOS slice (low-z → high-z)
@@ -354,6 +469,8 @@ print(f"Node redshifts: {n_nodes} nodes from z={z_max} to z={z_min}")
 print(f"Euclid      : M_UV < {M_UV_limit},  σ_z = {photoz_uncertainty}")
 print(f"Threads     : N_THREADS = {N_THREADS}  (of {os.cpu_count()} visible), "
       f"MINIMIZE_MEMORY = {MINIMIZE_MEMORY}")
+print(f"Estimator   : {ESTIMATOR}  (LOS sampling {LIGHTCONE_SAMPLING}, "
+      f"delta_gal mean {GALAXY_MEAN_SUBTRACTION})")
 
 # ── Pre-flight halo-catalogue cost ───────────────────────────────────────────
 # Extrapolated from the measured 256 Mpc run (see src/provenance.py).  The
@@ -411,6 +528,10 @@ manifest.record("parameters", {
     "n_bins_parallel": n_bins_parallel,
     "N_THREADS": N_THREADS,
     "MINIMIZE_MEMORY": MINIMIZE_MEMORY,
+    "SMOKE_TEST": SMOKE_TEST,
+    "ESTIMATOR": ESTIMATOR,
+    "LIGHTCONE_SAMPLING": LIGHTCONE_SAMPLING,
+    "GALAXY_MEAN_SUBTRACTION": GALAXY_MEAN_SUBTRACTION,
     "random_seed": RANDOM_SEED,
     "has_21cmfast": HAS_21CMFAST,
 })
@@ -469,10 +590,31 @@ if HAS_21CMFAST:
         },
     )
 
-    lightconer = p21c.RectilinearLightconer(
-        lc_redshifts=lc_redshifts,
-        quantities=("brightness_temp", "density", "neutral_fraction", "halo_sfr"),
-    )
+    _QUANTITIES = ("brightness_temp", "density", "neutral_fraction", "halo_sfr")
+
+    if LIGHTCONE_SAMPLING == "comoving":
+        # TODO.md P0.1 — `between_redshifts` builds
+        # `lc_distances = arange(d_min, d_max + res, res)` internally, so the
+        # slices are evenly spaced in comoving distance and the FFT's single
+        # assumed cell size is correct to machine precision.  The slice count
+        # follows from the resolution and is not ours to floor, so
+        # `minimum_los_slices` does not apply on this path.
+        lightconer = p21c.RectilinearLightconer.between_redshifts(
+            min_redshift=z_min,
+            max_redshift=z_max,
+            resolution=cell_size * u.Mpc,
+            quantities=_QUANTITIES,
+        )
+        print(f"  LOS sampling    : uniform in comoving distance "
+              f"({cell_size:.4f} Mpc resolution)")
+    else:
+        # Historical path: uniform in redshift, hence *not* uniform in
+        # comoving distance because dD/dz = c/H(z) varies across the box.
+        lightconer = p21c.RectilinearLightconer(
+            lc_redshifts=lc_redshifts,
+            quantities=_QUANTITIES,
+        )
+        print(f"  LOS sampling    : uniform in redshift ({N_z} slices)")
 
     lightcone = p21c.run_lightcone(
         lightconer=lightconer,
@@ -708,11 +850,29 @@ elif HAS_21CMFAST:
 
     sfr_field = lightcone.lightcones["halo_sfr"]   # (HII_DIM, HII_DIM, N_z)
 
-    mean_sfr = sfr_field.mean()
-    if mean_sfr > 0:
-        galaxy_overdensity = sfr_field / mean_sfr - 1.0
+    # TODO.md P0.2 — <SFR> evolves along the lightcone, so normalising by a
+    # single global scalar leaves a monotonic LOS ramp in delta_gal.
+    # Normalising per slice removes it by construction, and additionally makes
+    # delta_gal a true overdensity *at each redshift* rather than relative to
+    # the band average, which is what the bias and the Kaiser factor assume.
+    # Note the ramp itself sits at k_perp = 0, which the power-spectrum binning
+    # already discards (see analysis.subtract_field_mean), so this changes the
+    # binned spectra very little; it is a correctness fix, not a large
+    # numerical one.  "global" remains the default.
+    if GALAXY_MEAN_SUBTRACTION == "per_slice":
+        mean_sfr = sfr_field.mean(axis=(0, 1), keepdims=True)
+        galaxy_overdensity = np.where(
+            mean_sfr > 0, sfr_field / np.where(mean_sfr > 0, mean_sfr, 1.0) - 1.0, 0.0
+        )
+        print(f"  delta_gal norm  : per-slice <SFR> "
+              f"(range {float(mean_sfr.min()):.3e} - {float(mean_sfr.max()):.3e})")
     else:
-        galaxy_overdensity = np.zeros_like(sfr_field)
+        mean_sfr = sfr_field.mean()
+        if mean_sfr > 0:
+            galaxy_overdensity = sfr_field / mean_sfr - 1.0
+        else:
+            galaxy_overdensity = np.zeros_like(sfr_field)
+        print(f"  delta_gal norm  : single global <SFR> = {float(mean_sfr):.3e}")
 
     print(f"  SFR density  : [{sfr_field.min():.2e}, {sfr_field.max():.2e}] (internal units)")
     print(f"  Galaxy δ     : [{galaxy_overdensity.min():.2f}, {galaxy_overdensity.max():.2f}]")
@@ -1010,6 +1170,10 @@ with h5py.File(OUTPUT_FILE, "w") as f:
     f.attrs["t_STAR"]              = T_STAR_DEFAULT
     f.attrs["sfr_timescale_yr"]    = t_sf_yr
     f.attrs["beta_rsd"]            = beta_rsd
+    f.attrs["smoke_test"]              = SMOKE_TEST
+    f.attrs["estimator"]               = ESTIMATOR
+    f.attrs["lightcone_sampling"]      = LIGHTCONE_SAMPLING
+    f.attrs["galaxy_mean_subtraction"] = GALAXY_MEAN_SUBTRACTION
     f.attrs["mean_galaxy_density"] = mean_galaxy_density
     f.attrs["galaxy_weighting"]    = GALAXY_WEIGHTING
     f.attrs["photoz_uncertainty"]  = photoz_uncertainty

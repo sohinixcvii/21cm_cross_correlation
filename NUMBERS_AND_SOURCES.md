@@ -13,9 +13,10 @@ are display-only choices, documented as such in the function docstrings and
 deliberately not listed here.
 
 **Updated 2026-08-24.** The two `M_cell` entries in §1 were still quoting the
-retired 256 Mpc / 128³ grid and now carry the footprint-derived values; §10 is
-new, holding the derived numbers of the planned production run
-([`docs/simulation_spec.md`](docs/simulation_spec.md)).
+retired 256 Mpc / 128³ grid and now carry the footprint-derived values; §12 is
+the derived numbers of the planned production run
+([`docs/simulation_spec.md`](docs/simulation_spec.md)); §§10–11, added
+2026-08-25, cover the lightcone estimator and the smoke-test overrides.
 
 **Updated 2026-08-21.** Several entries previously marked *Source not yet
 confirmed* have been traced and are now cited: the `T_sys` model (21cmSense),
@@ -288,7 +289,42 @@ sharing the reference run's redshift, cosmology and sampler settings.
 
 ---
 
-## 10. Planned production run — derived numbers
+## 10. Lightcone estimator (TODO.md P0)
+
+`src/analysis.py`, added 2026-08-25.  Active only under
+`ESTIMATOR = "lightcone"`; the coeval path uses none of them.
+
+| Parameter | Value | Where used | Source |
+|---|---|---|---|
+| Blackman-Harris coefficients | `0.35875, 0.48829, 0.14128, 0.01168` | `blackman_harris_taper()` | Harris, F. J. (1978), Proc. IEEE 66, 51 — Table 1, the 4-term −92 dB window; standard in 21 cm delay-spectrum work via Parsons et al. (2012), ApJ 756, 165 |
+| Taper normalisation ⟨w²⟩ | `0.2580` (asymptotic; `0.25746` at N = 512) | `compute_cylindrical_cross_power()` | Derived — `a₀² + (a₁² + a₂² + a₃²)/2`, the noise-equivalent bandwidth that restores the amplitude of a homogeneous field |
+| `min_slices_per_band` | `8` | `subband_index_ranges()` | Internal to pipeline config — floor below which a band has no usable k_∥ axis |
+| Band count | `ceil(frequency span / bandwidth)` | `subband_index_ranges()` | Derived — guarantees each band spans ≤ the noise bandwidth (P0.4) |
+| Effective redshift | `z_eff = f_21 / ⟨ν_band⟩ − 1` | `compute_subband_power_spectra()` | Derived — the mean *observed frequency*, not the mean redshift; the two differ by ~0.2 % over 8 MHz at z = 7 |
+| Band combination | `sqrt(Σ SNR_band²)` | `combine_band_snr()` | Derived — sub-bands sample disjoint comoving volumes, so their measurements are independent |
+
+---
+
+## 11. Smoke-test overrides
+
+`src/smoke_test.py`, added 2026-08-25.  **Not scientific values**, and never
+active unless `--smoke-test` is passed.  Listed here so the audit is complete
+and so nobody mistakes one for a production parameter.
+
+| Parameter | Smoke value | Production value | Source |
+|---|---|---|---|
+| `HII_DIM` / `BOX_LEN` / `DIM` | `16` / `32.0` Mpc / `48` | `256` / `486.33` Mpc / `768` | Internal to smoke-test config — chosen for runtime, not physics |
+| `minimum_los_slices` | `12` | `100` | " |
+| `n_bins_perp` / `n_bins_parallel` | `8` / `8` | `20` / `20` | " |
+| `max_halos` | `200000` | `0` (all) | " |
+
+Everything else — the survey footprint, integration time, bandwidth, σ_z,
+the wedge buffer, the magnitude cuts and the random seed — is **unchanged**
+under `--smoke-test`; `SMOKE_TEST_UNCHANGED` records why in each case.
+
+---
+
+## 12. Planned production run — derived numbers
 
 Computed 2026-08-24 for [`docs/simulation_spec.md`](docs/simulation_spec.md),
 which specifies the run at *z* = 6.55–7.45 in the footprint-derived box. These

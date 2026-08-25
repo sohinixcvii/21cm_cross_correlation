@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import h5py
 import numpy as np
@@ -27,9 +27,12 @@ import numpy as np
 __all__ = [
     "SimulationData",
     "PowerSpectra",
+    "SubbandPowerSpectra",
     "load_simulation",
     "save_power_spectra",
     "load_power_spectra",
+    "save_subband_power_spectra",
+    "load_subband_power_spectra",
     "save_uncertainty_budget",
     "load_uncertainty_budget",
     "products_are_stale",
@@ -152,6 +155,33 @@ class SimulationData:
             return float(default)
         return float(self.attrs[name])
 
+    def get_str(self, name: str, default: str) -> str:
+        """
+        Read a string root attribute.
+
+        ``h5py`` returns text attributes as ``bytes`` or ``numpy.str_``
+        depending on how they were written, so decode both to ``str``.
+
+        Parameters
+        ----------
+        name : str
+            Attribute name, e.g. ``"estimator"``.
+        default : str
+            Value returned when the attribute is absent — which it is for
+            every file written before that attribute existed.
+
+        Returns
+        -------
+        str
+            The attribute value, or ``default``.
+        """
+        if name not in self.attrs:
+            return default
+        value = self.attrs[name]
+        if isinstance(value, bytes):
+            return value.decode()
+        return str(value)
+
 
 @dataclass
 class PowerSpectra:
@@ -178,6 +208,49 @@ class PowerSpectra:
     P_galaxy_auto: np.ndarray
     P_cross: np.ndarray
     mode_counts: np.ndarray
+
+
+@dataclass
+class SubbandPowerSpectra:
+    """
+    Per-sub-band power spectra of a lightcone, with each band's geometry.
+
+    Produced by :func:`src.analysis.compute_subband_power_spectra` when the
+    pipeline runs the ``lightcone`` estimator.  Each band has its own
+    effective redshift, comoving extent and bandwidth, so each gets its own
+    uncertainty budget; the totals combine in quadrature.
+
+    Attributes
+    ----------
+    bands : list of PowerSpectra
+        One set of spectra per band, in lightcone order.
+    z_effective, z_min, z_max : ndarray
+        Effective, lowest and highest redshift of each band.
+    frequency_min_hz, frequency_max_hz, bandwidth_hz : ndarray
+        Observed-frequency limits and span of each band [Hz].
+    los_length_mpc : ndarray
+        Comoving line-of-sight extent of each band [Mpc].
+    n_slices : ndarray
+        Lightcone slices per band.
+    index_ranges : ndarray
+        ``(n_bands, 2)`` ``[start, stop)`` indices into the LOS axis.
+    """
+
+    bands: List[PowerSpectra]
+    z_effective: np.ndarray
+    z_min: np.ndarray
+    z_max: np.ndarray
+    frequency_min_hz: np.ndarray
+    frequency_max_hz: np.ndarray
+    bandwidth_hz: np.ndarray
+    los_length_mpc: np.ndarray
+    n_slices: np.ndarray
+    index_ranges: np.ndarray
+
+    @property
+    def n_bands(self) -> int:
+        """Number of sub-bands."""
+        return len(self.bands)
 
 
 # ===========================================================================
@@ -346,6 +419,108 @@ def load_power_spectra(path: str) -> Tuple[PowerSpectra, Dict[str, Any]]:
         attrs = dict(f.attrs)
 
     return spectra, attrs
+
+
+#: Names of the :class:`SubbandPowerSpectra` per-band geometry arrays, stored
+#: as datasets of the cache's ``subbands`` group.
+_SUBBAND_GEOMETRY_KEYS = (
+    "z_effective", "z_min", "z_max",
+    "frequency_min_hz", "frequency_max_hz", "bandwidth_hz",
+    "los_length_mpc", "n_slices", "index_ranges",
+)
+
+
+def save_subband_power_spectra(
+    path: str,
+    subbands: SubbandPowerSpectra,
+    source_path: str,
+) -> None:
+    """
+    Write per-sub-band power spectra to an HDF5 cache.
+
+    The file layout mirrors :func:`save_power_spectra` — the *first* band's
+    spectra are written at the root, so a reader that knows nothing about
+    sub-bands still sees a valid single-band cache — with every band under
+    ``subbands/band_00``, ``band_01``, ... and the per-band geometry as
+    datasets of the ``subbands`` group.
+
+    Parameters
+    ----------
+    path : str
+        Destination file, e.g. ``outputs/analysis_products.h5``.
+    subbands : SubbandPowerSpectra
+        Spectra and geometry to store.
+    source_path : str
+        Simulation file the spectra came from; its mtime drives
+        :func:`products_are_stale`.
+
+    Raises
+    ------
+    ValueError
+        If ``subbands`` holds no bands.
+    """
+    if subbands.n_bands == 0:
+        raise ValueError("cannot save an empty SubbandPowerSpectra")
+
+    save_power_spectra(path, subbands.bands[0], source_path)
+
+    with h5py.File(path, "a") as f:
+        group = f.require_group("subbands")
+        group.attrs["n_bands"] = subbands.n_bands
+        for key in _SUBBAND_GEOMETRY_KEYS:
+            group.create_dataset(key, data=np.asarray(getattr(subbands, key)))
+        for index, band in enumerate(subbands.bands):
+            band_group = group.create_group(f"band_{index:02d}")
+            band_group.create_dataset("k_perp", data=band.k_perp)
+            band_group.create_dataset("k_parallel", data=band.k_parallel)
+            band_group.create_dataset("P_21cm_auto", data=band.P_21cm_auto)
+            band_group.create_dataset("P_galaxy_auto", data=band.P_galaxy_auto)
+            band_group.create_dataset("P_cross", data=band.P_cross)
+            band_group.create_dataset("mode_counts", data=band.mode_counts)
+        f.attrs["estimator"] = "lightcone"
+
+
+def load_subband_power_spectra(
+    path: str,
+) -> Tuple[Optional[SubbandPowerSpectra], Dict[str, Any]]:
+    """
+    Read per-sub-band power spectra back from the cache.
+
+    Parameters
+    ----------
+    path : str
+        Cache written by :func:`save_subband_power_spectra`.
+
+    Returns
+    -------
+    SubbandPowerSpectra or None
+        ``None`` when the file holds no ``subbands`` group — i.e. it was
+        written by the coeval estimator.
+    dict
+        The cache root attributes.
+    """
+    with h5py.File(path, "r") as f:
+        attrs = dict(f.attrs)
+        if "subbands" not in f:
+            return None, attrs
+
+        group = f["subbands"]
+        geometry = {key: group[key][...] for key in _SUBBAND_GEOMETRY_KEYS}
+        bands = []
+        for index in range(int(group.attrs["n_bands"])):
+            band_group = group[f"band_{index:02d}"]
+            bands.append(
+                PowerSpectra(
+                    k_perp=band_group["k_perp"][:],
+                    k_parallel=band_group["k_parallel"][:],
+                    P_21cm_auto=band_group["P_21cm_auto"][:],
+                    P_galaxy_auto=band_group["P_galaxy_auto"][:],
+                    P_cross=band_group["P_cross"][:],
+                    mode_counts=band_group["mode_counts"][:],
+                )
+            )
+
+    return SubbandPowerSpectra(bands=bands, **geometry), attrs
 
 
 def save_uncertainty_budget(path: str, budget: Any) -> None:
