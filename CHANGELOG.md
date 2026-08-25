@@ -7,6 +7,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Smoke-test follow-ups, 2026-08-25 ──────────────────────────────── -->
+
+### Changed
+
+- **Contour overlays are legible on every part of their colormap.** In
+  `galaxy_overdensity_on_21cm`, the δT_b contours were black on `RdBu_r`,
+  which disappears into the saturated blue end. No single colour contrasts
+  with a full diverging scale, so the contours now carry a dark stroke
+  (`_outline`) and a high-luminance fill: gold on the diverging map, a
+  brighter red on the EoR map — whose low end is near-black, where the old
+  crimson was equally weak. Labels get the same treatment.
+
+  `_outline` handles both contour APIs: Matplotlib ≥ 3.8 makes `ContourSet`
+  an artist and drops `.collections`, which the first attempt tripped over.
+
+- **`outputs/` is no longer ignored wholesale.** Figures, run logs, the
+  summary JSON and the run manifests are small and are the record of what a
+  run produced, so they are now tracked. Only the bulk regenerable data is
+  excluded — `*.h5`/`*.npy`/`*.npz` under `outputs/`, which is where the
+  2.8–19 GB `lightcone_data.h5` lives — along with `outputs/smoke_test/`,
+  whose products are regenerated on every pre-flight and are meaningless by
+  construction. `.DS_Store` is now ignored too, since un-ignoring `outputs/`
+  exposed it.
+
 <!-- ─── Smoke-test mode, 2026-08-25 ─────────────────────────────────────── -->
 
 ### Added

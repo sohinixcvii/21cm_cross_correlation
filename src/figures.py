@@ -33,6 +33,7 @@ matplotlib.use("Agg")   # headless-safe; must precede pyplot import
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib import patheffects
 from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 from matplotlib.figure import Figure
 from scipy.ndimage import gaussian_filter, generic_filter
@@ -185,6 +186,41 @@ def fill_nan_nearest(arr: np.ndarray) -> np.ndarray:
         kernel_filled = generic_filter(filled, np.nanmean, size=3, mode="nearest")
         filled = np.where(np.isnan(filled), kernel_filled, filled)
     return filled
+
+
+#: Contour colour for overlays on a diverging (RdBu_r) map.  Gold is high
+#: luminance against *both* saturated ends of that colormap, where black
+#: disappears into the blue and white disappears into the pale centre.
+CONTOUR_COLOR_ON_DIVERGING = "#FFC61E"
+
+#: Contour colour for overlays on the EoR map, whose low end is near-black.
+CONTOUR_COLOR_ON_EOR = "#FF3B5C"
+
+
+def _outline(artist_contour, width: float = 2.0) -> None:
+    """
+    Give contour lines and their labels a dark outline.
+
+    A single colour cannot contrast with every part of a diverging or
+    multi-hue colormap, so the lines carry a stroke instead: the outline
+    holds the line legible over the light middle of the scale, and the fill
+    holds it legible over the dark ends.
+
+    Parameters
+    ----------
+    artist_contour : QuadContourSet
+        The contour set returned by ``Axes.contour``.
+    width : float, optional
+        Total stroke width in points; the line sits inside it.
+    """
+    stroke = [patheffects.withStroke(linewidth=width, foreground="0.15")]
+    # Matplotlib >= 3.8 makes ContourSet an artist in its own right and drops
+    # the `.collections` list; older versions need the per-collection loop.
+    if hasattr(artist_contour, "set_path_effects"):
+        artist_contour.set_path_effects(stroke)
+    else:                                            # pragma: no cover - old mpl
+        for collection in artist_contour.collections:
+            collection.set_path_effects(stroke)
 
 
 def eor_colormap() -> LinearSegmentedColormap:
@@ -1538,9 +1574,14 @@ def plot_galaxy_overdensity_on_21cm(
     if gal_levels.size:
         contour = axes[0].contour(
             grid_x, grid_y, delta_smooth.T, levels=gal_levels,
-            colors="crimson", linewidths=1.0, alpha=0.9,
+            colors=CONTOUR_COLOR_ON_EOR, linewidths=1.1, alpha=1.0,
         )
-        axes[0].clabel(contour, fmt=lambda v: f"{v:.2f}", fontsize=7)
+        _outline(contour)
+        labels = axes[0].clabel(contour, fmt=lambda v: f"{v:.2f}", fontsize=7)
+        for label in labels:
+            label.set_path_effects(
+                [patheffects.withStroke(linewidth=2.0, foreground="0.15")]
+            )
     axes[0].set_title(r"$\delta_{\rm gal}$ contours over $\delta T_b$")
 
     # -- Panel 2: the same maps, roles swapped ----------------------------
@@ -1555,9 +1596,14 @@ def plot_galaxy_overdensity_on_21cm(
     if temp_levels.size:
         contour = axes[1].contour(
             grid_x, grid_y, temp_smooth.T, levels=temp_levels,
-            colors="k", linewidths=1.0, alpha=0.8,
+            colors=CONTOUR_COLOR_ON_DIVERGING, linewidths=1.1, alpha=1.0,
         )
-        axes[1].clabel(contour, fmt=lambda v: f"{v:.0f}", fontsize=7)
+        _outline(contour)
+        labels = axes[1].clabel(contour, fmt=lambda v: f"{v:.0f}", fontsize=7)
+        for label in labels:
+            label.set_path_effects(
+                [patheffects.withStroke(linewidth=2.0, foreground="0.15")]
+            )
     axes[1].set_title(r"$\delta T_b$ contours over $\delta_{\rm gal}$")
 
     for ax in axes[:2]:

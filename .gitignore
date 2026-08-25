@@ -2,17 +2,34 @@
 __pycache__/
 *.pyc
 
+# macOS directory metadata
+.DS_Store
+
 # 21cmFAST simulation cache (hash-named cache dirs written to project root).
 # One 32-hex-character directory per unique InputParameters set; they hold
 # multi-GB InitialConditions/HaloCatalog files and are regenerable.
 [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]/
 
-# Generated simulation outputs
-outputs/
+# ── Simulation outputs ───────────────────────────────────────────────────
+# `outputs/` is no longer ignored wholesale: the figures, run logs, summary
+# JSON and run manifests are small, are the record of what a run produced,
+# and are tracked. Only the bulk data a run can regenerate is excluded.
+#
+# The binding number is the HDF5: `lightcone_data.h5` is ~2.8 GB at the
+# 256 Mpc box and ~19 GB at the planned 486 Mpc one, almost all of it the
+# halo catalogue (docs/simulation_spec.md §3).
+outputs/**/*.h5
+outputs/**/*.hdf5
+outputs/**/*.npy
+outputs/**/*.npz
+
+# Pre-flight smoke-test products. Regenerated on every `--smoke-test` run and
+# scientifically meaningless by construction, so they would only add churn.
+# Delete this rule if you want a smoke run's figures under review.
+outputs/smoke_test/
 
 # Reference literature (local only, not part of repo)
 resources/
 
 # Editor settings (local only)
 .vscode/
-
