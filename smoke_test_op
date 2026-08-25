@@ -1,0 +1,55 @@
+  ┌─ SMOKE TEST — reduced configuration, NOT a science run ─────────
+  │  parameter            smoke        production   why
+  │  HII_DIM              16           256          ionisation/21 cm grid; cost scales as HII_DIM^3
+  │  BOX_LEN              32.0         486.33       comoving box [Mpc]; the halo catalogue scales with its cube
+  │  DIM                  48           768          initial-conditions grid, held at the 3x HII_DIM convention
+  │  minimum_los_slices   12           100          line-of-sight slices; sets the lightcone's third dimension
+  │  n_bins_perp          8            20           a 16-cell transverse grid cannot fill 20 log-spaced k bins
+  │  n_bins_parallel      8            20           as above, for the line-of-sight axis
+  │  max_halos            200000       0            cap on the catalogue the analysis stage loads (0 = all)
+  │  unchanged: SURVEY_AREA_DEG2, integration_time, bandwidth, photoz_uncertainty, wedge_buffer, M_UV_limit / M_UV_bright, RANDOM_SEED, SAMPLER_MIN_MASS
+  └──────────────────────────────────────────────────────────────────
+  Outputs → outputs/smoke_test/
+
+
+========================================================================
+  STAGE 1 — SIMULATION
+========================================================================
+  Running run_simulation.py (this is the expensive stage) …
+21cmFAST version: 4.1.1
+
+  ┌─ SMOKE TEST — reduced configuration, NOT a science run ─────────
+  │  parameter            smoke        production   why
+  │  HII_DIM              16           256          ionisation/21 cm grid; cost scales as HII_DIM^3
+  │  BOX_LEN              32.0         486.33       comoving box [Mpc]; the halo catalogue scales with its cube
+  │  DIM                  48           768          initial-conditions grid, held at the 3x HII_DIM convention
+  │  minimum_los_slices   12           100          line-of-sight slices; sets the lightcone's third dimension
+  │  n_bins_perp          8            20           a 16-cell transverse grid cannot fill 20 log-spaced k bins
+  │  n_bins_parallel      8            20           as above, for the line-of-sight axis
+  │  max_halos            200000       0            cap on the catalogue the analysis stage loads (0 = all)
+  │  unchanged: SURVEY_AREA_DEG2, integration_time, bandwidth, photoz_uncertainty, wedge_buffer, M_UV_limit / M_UV_bright, RANDOM_SEED, SAMPLER_MIN_MASS
+  └──────────────────────────────────────────────────────────────────
+
+Box         : 32.0 Mpc,  16³ cells  →  cell size = 2.00 Mpc
+Footprint   : 10 deg² at z = 7  →  BOX_LEN = 32.0 Mpc  (Euclid Deep Field Fornax)
+Survey LOS  : Δz = 0.9 (±1σ_z)  →  z = 6.55–7.45, L_LOS = 315.6 Mpc [overridden by the smoke-test slab below]
+Mass res.   : 1.175e+10 M⊙/cell (DIM=48, 0.667 Mpc)  |  3.173e+11 M⊙/cell (HII_DIM=16, 2.00 Mpc)
+Lightcone   : z = 6.995 → 7.005   (reference z_obs = 7.0)
+LOS extent  : 3.5 Mpc  →  N_z = 12 slices
+Box shape   : (16, 16, 12)
+Node redshifts: 5 nodes from z=7.005 to z=6.995
+Euclid      : M_UV < -18,  σ_z = 0.45
+Threads     : N_THREADS = 128  (of 128 visible), MINIMIZE_MEMORY = True
+Estimator   : coeval  (LOS sampling redshift, delta_gal mean global)
+Est. halos  : 2.669e+05 drawn (2.232e+05 after perturbation) in 3.277e+04 Mpc³  →  0.0 GB on disk, ~0.0 GB resident while perturbing
+Run manifest: /nvme2/scratch/sohini/21cm_cross_correlation/outputs/smoke_test/runs/sim_20260825_153658.json
+
+Running 21cmFAST lightcone simulation …
+  z = 6.995 → 7.005,  N_z = 12 slices
+
+  SMOKE TEST — stage checks
+  ------------------------------------------------
+  [FAIL] pipeline  aborted: run_simulation.py failed with exit code 1
+  ------------------------------------------------
+  RESULT: FAILED — see the lines marked FAIL above
+  (shapes only; the numbers from a smoke run are not physical)
