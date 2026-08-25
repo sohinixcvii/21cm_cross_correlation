@@ -313,10 +313,12 @@ and so nobody mistakes one for a production parameter.
 
 | Parameter | Smoke value | Production value | Source |
 |---|---|---|---|
-| `HII_DIM` / `BOX_LEN` / `DIM` | `16` / `32.0` Mpc / `48` | `256` / `486.33` Mpc / `768` | Internal to smoke-test config — chosen for runtime, not physics |
+| `HII_DIM` / `BOX_LEN` / `DIM` | `24` / `48.0` Mpc / `72` | `256` / `486.33` Mpc / `768` | Internal to smoke-test config — chosen for runtime, not physics. The box is floored at `3 x R_BUBBLE_MAX = 45` Mpc by 21cmFAST's own validation, and 48 Mpc / 24 cells keeps the production 2.0 Mpc cell |
+| `N_THREADS` | `4` | `SLURM_CPUS_PER_TASK` or `os.cpu_count()` | " |
 | `minimum_los_slices` | `12` | `100` | " |
 | `n_bins_perp` / `n_bins_parallel` | `8` / `8` | `20` / `20` | " |
 | `max_halos` | `200000` | `0` (all) | " |
+| `MIN_BOX_LEN_OVER_R_BUBBLE_MAX` | `3.0` | — | py21cmfast input validation: "Your R_BUBBLE_MAX is > BOX_LEN/3" |
 
 Everything else — the survey footprint, integration time, bandwidth, σ_z,
 the wedge buffer, the magnitude cuts and the random seed — is **unchanged**

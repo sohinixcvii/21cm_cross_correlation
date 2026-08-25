@@ -26,9 +26,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   | Overridden | Smoke | Production | Why |
   |---|---|---|---|
-  | `HII_DIM` / `BOX_LEN` / `DIM` | 16 / 32.0 Mpc / 48 | 256 / 486.33 Mpc / 768 | the catalogue scales with the box's cube — a factor ~3500 |
+  | `HII_DIM` / `BOX_LEN` / `DIM` | 24 / 48.0 Mpc / 72 | 256 / 486.33 Mpc / 768 | the catalogue scales with the box's cube — a factor ~1000 |
+  | `N_THREADS` | 4 | `SLURM_CPUS_PER_TASK` / `os.cpu_count()` | a 24³ box does not use 128 threads |
   | `minimum_los_slices` | 12 | 100 | sets the lightcone's third dimension |
-  | `n_bins_perp` / `n_bins_parallel` | 8 / 8 | 20 / 20 | a 16-cell grid cannot fill 20 log bins |
+  | `n_bins_perp` / `n_bins_parallel` | 8 / 8 | 20 / 20 | a 24-cell grid cannot fill 20 log bins |
   | `max_halos` | 200,000 | 0 (all) | caps the analysis-stage catalogue read |
 
   Deliberately **not** overridden, and recorded as such in
@@ -63,6 +64,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 asserted. `check_mcmc_chain` exists as a hook — it validates
 `(n_walkers, n_steps, n_parameters)` when handed a chain, and otherwise
 reports the stage as *absent* rather than passing over it silently.
+
+### Fixed
+
+- **The first smoke run aborted, and the fix was to grow the box rather than
+  shrink the physics.** `run_simulation.py --smoke-test` failed in 21cmFAST's
+  input validation with
+  `Your R_BUBBLE_MAX is > BOX_LEN/3 (15.0 > 10.667)`: the 32 Mpc smoke box
+  could not support the `"simple"` template's 15 Mpc excursion-set filter
+  radius. The box is now **48 Mpc on a 24³ grid** — the smallest that
+  satisfies `BOX_LEN >= 3 R_BUBBLE_MAX = 45` Mpc while keeping the production
+  2.0 Mpc cell size, so the smoke run exercises the *same* source model as a
+  real run rather than a quietly different one.
+
+  `check_box_supports_the_source_model()` now makes that constraint a
+  pre-flight failure with a message naming the limit, instead of an abort
+  after the run manifest has been written, and
+  `test_smoke_box_satisfies_the_source_model` guards the configuration.
+
+- **`N_THREADS` is now part of the smoke overrides (4).** The first run
+  reported `N_THREADS = 128 (of 128 visible)` on a 16³ box: exactly the
+  unscheduled-machine hazard recorded as R7 in `docs/simulation_spec.md`,
+  where `resolve_n_threads()` falls through to `os.cpu_count()` and takes
+  every SMT thread of a shared node.
+
+- **The child's stderr now reaches the smoke report.** The failing run printed
+  no reason for its exit code 1; under `--smoke-test` the simulation
+  subprocess's stderr is captured, re-emitted, and its last lines are folded
+  into the `RuntimeError`, so the FAIL line names the actual exception.
 
 <!-- ─── TODO.md P0: the lightcone estimator, 2026-08-25 ─────────────────── -->
 

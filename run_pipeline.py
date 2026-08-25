@@ -208,11 +208,25 @@ def run_simulation_stage(
     if smoke_test:
         # The child owns its own reduced configuration; see src/smoke_test.py.
         command.append("--smoke-test")
-    result = subprocess.run(command, cwd=REPO_ROOT)
+
+    # Under --smoke-test, capture the child's stderr so its exception reaches
+    # the stage report: a pre-flight check that fails without saying why is
+    # not much of a pre-flight check.  stdout still streams live.
+    result = subprocess.run(
+        command, cwd=REPO_ROOT,
+        stderr=subprocess.PIPE if smoke_test else None,
+        text=True,
+    )
 
     if result.returncode != 0:
+        detail = ""
+        if smoke_test and result.stderr:
+            sys.stderr.write(result.stderr)
+            tail = [line for line in result.stderr.strip().splitlines()
+                    if line.strip()][-3:]
+            detail = " — " + " | ".join(tail)
         raise RuntimeError(
-            f"{script} failed with exit code {result.returncode}"
+            f"{script} failed with exit code {result.returncode}{detail}"
         )
 
     log(f"  Simulation finished in {time.time() - start:.1f} s", quiet)

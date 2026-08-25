@@ -40,9 +40,9 @@ class TestOverrideTable:
             assert entry["why"], f"{name} has no justification"
 
     def test_overrides_are_smaller_than_production(self):
-        """Every reduction must actually reduce — max_halos 0 means 'all'."""
+        """Every reduction must actually reduce — some have no numeric pair."""
         for name, entry in smoke_test.SMOKE_TEST_OVERRIDES.items():
-            if name == "max_halos":
+            if name in ("max_halos", "N_THREADS"):
                 continue
             assert entry["value"] < entry["production"], (
                 f"{name} is not a reduction"
@@ -52,9 +52,27 @@ class TestOverrideTable:
         overrides = smoke_test.SMOKE_TEST_OVERRIDES
         assert overrides["DIM"]["value"] == 3 * overrides["HII_DIM"]["value"]
 
+    def test_smoke_box_keeps_the_production_cell_size(self):
+        """2.0 Mpc, so the smoke run's mass resolution is not a third thing."""
+        overrides = smoke_test.SMOKE_TEST_OVERRIDES
+        cell = overrides["BOX_LEN"]["value"] / overrides["HII_DIM"]["value"]
+        assert cell == pytest.approx(2.0)
+
+    def test_smoke_box_satisfies_the_source_model(self):
+        """
+        Regression guard for the 2026-08-25 smoke-run failure.
+
+        The first smoke configuration used a 32 Mpc box, and 21cmFAST rejects
+        BOX_LEN < 3 x R_BUBBLE_MAX = 45 Mpc for the template's 15 Mpc.
+        """
+        ok, message = smoke_test.check_box_supports_the_source_model(
+            smoke_test.SMOKE_TEST_OVERRIDES["BOX_LEN"]["value"], 15.0
+        )
+        assert ok, message
+
     def test_override_returns_production_value_for_unlisted_names(self):
         assert smoke_test.override("integration_time", 3.6e6) == 3.6e6
-        assert smoke_test.override("HII_DIM", 256) == 16
+        assert smoke_test.override("HII_DIM", 256) == 24
 
     def test_describe_overrides_names_every_parameter(self):
         text = smoke_test.describe_overrides()
@@ -70,6 +88,23 @@ class TestOverrideTable:
 # ===========================================================================
 #  Report
 # ===========================================================================
+
+class TestBoxVersusSourceModel:
+    """21cmFAST refuses a box narrower than three filter radii."""
+
+    def test_accepts_a_box_of_exactly_three_radii(self):
+        ok, message = smoke_test.check_box_supports_the_source_model(45.0, 15.0)
+        assert ok and message == ""
+
+    def test_rejects_a_box_below_the_limit(self):
+        ok, message = smoke_test.check_box_supports_the_source_model(32.0, 15.0)
+        assert not ok
+        assert "45" in message and "R_BUBBLE_MAX" in message
+
+    def test_message_says_to_raise_the_box_not_lower_the_physics(self):
+        _, message = smoke_test.check_box_supports_the_source_model(10.0, 15.0)
+        assert "Raise BOX_LEN" in message
+
 
 class TestSmokeReport:
     def test_passes_only_when_every_check_passes(self):

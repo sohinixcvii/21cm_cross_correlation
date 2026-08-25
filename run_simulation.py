@@ -392,6 +392,7 @@ if SMOKE_TEST:
     DIM             = _smoke_override("DIM", DIM)
     n_bins_perp     = _smoke_override("n_bins_perp", n_bins_perp)
     n_bins_parallel = _smoke_override("n_bins_parallel", n_bins_parallel)
+    N_THREADS       = _smoke_override("N_THREADS", N_THREADS)
 
     OUTPUT_DIR  = SMOKE_OUTPUT_DIR
     OUTPUT_FILE = os.path.join(OUTPUT_DIR, "lightcone_data.h5")
@@ -574,6 +575,22 @@ if HAS_21CMFAST:
         ["simple"],
         random_seed=RANDOM_SEED,
     )
+
+    if SMOKE_TEST:
+        # The reduced box has to stay large enough for the *unmodified* source
+        # model: 21cmFAST refuses BOX_LEN < 3 x R_BUBBLE_MAX, and does so
+        # inside input validation, i.e. after the run has been queued and the
+        # manifest written.  Fail here instead, naming the constraint.
+        from src.smoke_test import check_box_supports_the_source_model
+
+        _ok, _why = check_box_supports_the_source_model(
+            BOX_LEN, float(inputs.astro_params.R_BUBBLE_MAX)
+        )
+        if not _ok:
+            manifest.finish("failed")
+            raise ValueError(_why)
+        print(f"  Smoke pre-flight: BOX_LEN {BOX_LEN:g} Mpc >= 3 x "
+              f"R_BUBBLE_MAX ({3 * float(inputs.astro_params.R_BUBBLE_MAX):g} Mpc) ✓")
 
     inputs = inputs.clone(
         node_redshifts=node_redshifts,

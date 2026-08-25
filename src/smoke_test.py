@@ -59,6 +59,8 @@ __all__ = [
     "SMOKE_TEST_OVERRIDES",
     "SMOKE_OUTPUT_DIR",
     "describe_overrides",
+    "check_box_supports_the_source_model",
+    "MIN_BOX_LEN_OVER_R_BUBBLE_MAX",
     "SmokeCheck",
     "SmokeReport",
     "check_simulation_output",
@@ -84,19 +86,31 @@ SMOKE_OUTPUT_DIR = os.path.join("outputs", "smoke_test")
 #: anything else.  ``(32 / 486.33)^3`` is a factor 3500 in catalogue size.
 SMOKE_TEST_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "HII_DIM": {
-        "value": 16,
+        "value": 24,
         "production": 256,
         "why": "ionisation/21 cm grid; cost scales as HII_DIM^3",
     },
     "BOX_LEN": {
-        "value": 32.0,
+        "value": 48.0,
         "production": 486.33,
-        "why": "comoving box [Mpc]; the halo catalogue scales with its cube",
+        "why": (
+            "comoving box [Mpc]; the halo catalogue scales with its cube. "
+            "Floored by R_BUBBLE_MAX: 21cmFAST rejects BOX_LEN < 3 x "
+            "R_BUBBLE_MAX, which is 45 Mpc for the template's 15 Mpc"
+        ),
     },
     "DIM": {
-        "value": 48,
+        "value": 72,
         "production": 768,
         "why": "initial-conditions grid, held at the 3x HII_DIM convention",
+    },
+    "N_THREADS": {
+        "value": 4,
+        "production": "SLURM_CPUS_PER_TASK or os.cpu_count()",
+        "why": (
+            "a 24^3 box does not use 128 threads; on an unscheduled machine "
+            "resolve_n_threads() would take every SMT thread of a shared node"
+        ),
     },
     "minimum_los_slices": {
         "value": 12,
@@ -136,6 +150,11 @@ SMOKE_TEST_UNCHANGED: Dict[str, str] = {
     "wedge_buffer": "post-processing scalar; no runtime cost",
     "M_UV_limit / M_UV_bright": "selection thresholds; no runtime cost",
     "RANDOM_SEED": "kept at 42 so a smoke run is reproducible",
+    "R_BUBBLE_MAX and every other astro parameter": (
+        "left at the template's documented values; the box is raised to "
+        "satisfy them instead of the reverse, so the smoke run exercises the "
+        "same source model as production"
+    ),
     "SAMPLER_MIN_MASS": (
         "left at the template default; shrinking the box already removes the "
         "catalogue cost, and raising the mass floor would change which halos "
@@ -188,6 +207,61 @@ def override(name: str, production_value: Any) -> Any:
     """
     entry = SMOKE_TEST_OVERRIDES.get(name)
     return production_value if entry is None else entry["value"]
+
+
+#: 21cmFAST rejects a box smaller than this multiple of ``R_BUBBLE_MAX``:
+#: "Your R_BUBBLE_MAX is > BOX_LEN/3 ... This can produce strange reionisation
+#: topologies".  The check lives in ``py21cmfast``'s input validation and
+#: aborts before any compute.
+MIN_BOX_LEN_OVER_R_BUBBLE_MAX = 3.0
+
+
+def check_box_supports_the_source_model(
+    box_len: float,
+    r_bubble_max: float,
+) -> Tuple[bool, str]:
+    """
+    Check a reduced box against the excursion-set filter radius.
+
+    Shrinking the box is the cheapest way to make a smoke run fast, and it is
+    also the way to make 21cmFAST refuse to start: the ionisation field is
+    built by filtering on scales up to ``R_BUBBLE_MAX``, and a box narrower
+    than ``3 R_BUBBLE_MAX`` cannot support that.  This turns that abort into a
+    message naming the constraint and the smallest box that satisfies it.
+
+    Parameters
+    ----------
+    box_len : float
+        Comoving box side length [Mpc].
+    r_bubble_max : float
+        ``R_BUBBLE_MAX`` from the astrophysical parameter set [Mpc].
+
+    Returns
+    -------
+    bool
+        Whether the box is large enough.
+    str
+        An explanation, empty when the box is fine.
+
+    Examples
+    --------
+    >>> ok, _ = check_box_supports_the_source_model(48.0, 15.0)
+    >>> ok
+    True
+    >>> ok, message = check_box_supports_the_source_model(32.0, 15.0)
+    >>> ok
+    False
+    """
+    minimum = MIN_BOX_LEN_OVER_R_BUBBLE_MAX * float(r_bubble_max)
+    if float(box_len) >= minimum:
+        return True, ""
+    return False, (
+        f"BOX_LEN = {box_len:g} Mpc is too small for the source model: "
+        f"21cmFAST requires BOX_LEN >= 3 x R_BUBBLE_MAX = {minimum:g} Mpc "
+        f"(R_BUBBLE_MAX = {r_bubble_max:g} Mpc). Raise BOX_LEN in "
+        f"SMOKE_TEST_OVERRIDES rather than lowering R_BUBBLE_MAX, so the "
+        f"smoke run keeps the production source model."
+    )
 
 
 # ===========================================================================
