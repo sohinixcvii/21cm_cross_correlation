@@ -88,6 +88,29 @@ reports the stage as *absent* rather than passing over it silently.
   where `resolve_n_threads()` falls through to `os.cpu_count()` and takes
   every SMT thread of a shared node.
 
+- **`plot_halo_catalogue` indexed the lightcone with a transverse index.**
+  The smoke run's second failure:
+  `IndexError: index 12 is out of bounds for axis 2 with size 12`. The
+  21 cm slice was taken at `data.HII_DIM // 2` — an index into the
+  *transverse* grid — while the field's third axis holds `N_z` lightcone
+  slices. It stayed in range only while `N_z > HII_DIM / 2`, which is true of
+  every configuration this project has run (128/100, 256/166) and false for
+  the smoke geometry (24/12).
+
+  This was a **latent production bug, not a smoke-test artefact**: even when
+  in range, it paired a 21 cm slice at lightcone index `HII_DIM/2` with a halo
+  slab at catalogue depth `HII_DIM/2 × cell_size`, two different physical
+  depths that only looked aligned because the coeval catalogue and the
+  lightcone happen to share an array shape. Each is now taken at its own
+  midpoint — the field's `shape[2] // 2` and `BOX_LEN / 2` respectively — which
+  leaves the halo slab exactly where it was and moves the plotted 21 cm slice
+  to the line-of-sight centre where it belongs.
+
+  Guarded by three tests: the failing geometry directly, the slice's identity
+  against the field's own axis, and **all 18 figures rendered on a
+  smoke-shaped box**, since the original failure stopped at the third figure
+  and hid whatever came after it. Nothing else broke.
+
 - **The child's stderr now reaches the smoke report.** The failing run printed
   no reason for its exit code 1; under `--smoke-test` the simulation
   subprocess's stderr is captured, re-emitted, and its last lines are folded

@@ -14,6 +14,7 @@ from dataclasses import replace
 import matplotlib
 import numpy as np
 import pytest
+from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 
 from src import analysis, figures
@@ -521,3 +522,81 @@ def test_overlay_survives_empty_selection(tiny_sim: SimulationData, tmp_path) ->
     )
     assert "degenerate field" in fig.axes[2].get_title()
     assert_saves(fig, tmp_path, "galaxy_overdensity_on_21cm_empty")
+
+
+# ===========================================================================
+#  Lightcone vs coeval axis lengths
+# ===========================================================================
+
+def test_halo_catalogue_figure_handles_a_short_line_of_sight(tmp_path):
+    """
+    Regression guard for the 2026-08-25 smoke-run IndexError.
+
+    ``plot_halo_catalogue`` indexed the lightcone's line-of-sight axis with
+    ``HII_DIM // 2``.  That is an index into the *transverse* grid, and it
+    stayed in range only while ``N_z > HII_DIM / 2``.  The smoke-test
+    configuration (24 transverse cells, 12 slices) is the first geometry in
+    this project where it does not.
+    """
+    from conftest import write_tiny_simulation
+    from src.dataio import load_simulation
+
+    path = write_tiny_simulation(
+        str(tmp_path / "short_los.h5"), hii_dim=24, n_z=12, n_halos=500,
+    )
+    data = load_simulation(path)
+    assert data.HII_DIM // 2 >= data.brightness_temp_field.shape[2], (
+        "fixture no longer reproduces the failing geometry"
+    )
+
+    figure = figures.plot_halo_catalogue(data)
+    assert figure is not None
+    plt.close(figure)
+
+
+def test_halo_catalogue_slice_is_taken_from_the_line_of_sight_axis(tiny_sim):
+    """The plotted slice must come from the field's own third axis."""
+    figure = figures.plot_halo_catalogue(tiny_sim)
+    # Panel 3 holds the imshow; its data must be one transverse plane.
+    image = figure.axes[2].images[0]
+    n_z = tiny_sim.brightness_temp_field.shape[2]
+    expected = tiny_sim.brightness_temp_field[:, :, n_z // 2].T
+    assert np.allclose(image.get_array(), expected)
+    plt.close(figure)
+
+
+def test_every_figure_survives_the_smoke_test_geometry(tmp_path):
+    """
+    All 18 figures must render on the reduced grid, not just the first one.
+
+    The 2026-08-25 smoke run failed on ``halo_catalogue``, the third figure
+    written; the ones after it were never reached. This renders the whole set
+    on a smoke-shaped box so a second latent shape assumption cannot hide
+    behind the first.
+    """
+    from conftest import write_tiny_simulation
+    from src.dataio import load_simulation
+    import run_pipeline
+
+    path = write_tiny_simulation(
+        str(tmp_path / "smoke_shaped.h5"), hii_dim=24, n_z=12, n_halos=5_000,
+    )
+    data = load_simulation(path)
+
+    spectra = analysis.compute_all_power_spectra(
+        data.brightness_temp_field, data.galaxy_overdensity,
+        box_len_perp=data.BOX_LEN, box_len_los=data.L_los,
+        n_bins_perp=8, n_bins_parallel=8,
+    )
+    budget = analysis.compute_uncertainty_budget(spectra, z_obs=data.z_obs)
+    _, bias = run_pipeline.bias_stage(data, m_uv_bright=-22.0, quiet=True)
+
+    written = run_pipeline.figure_stage(
+        groups=list(run_pipeline.PLOT_GROUPS),
+        data=data, spectra=spectra, budget=budget, bias=bias,
+        output_dir=str(tmp_path / "figures"),
+        fmt="png", quiet=True, m_uv_bright=-22.0, galaxy_weighting="number",
+    )
+
+    assert len(written) == 18
+    assert all(os.path.exists(p) and os.path.getsize(p) > 0 for p in written)

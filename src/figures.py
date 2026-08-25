@@ -293,8 +293,15 @@ def plot_halo_catalogue(
     axes[1].set_title("Halo mass distribution")
 
     # ── Panel 3: halos over a 21 cm slice ─────────────────────────────────
-    slice_index = data.HII_DIM // 2
-    slice_z_mpc = slice_index * data.cell_size
+    # The 21 cm field is a *lightcone*: its third axis has N_z cells, which is
+    # not HII_DIM.  The halo catalogue is *coeval* and spans BOX_LEN along z.
+    # The two share the (x, y) plane but not the line-of-sight scale
+    # (docs/HPC.md §6), so each is taken at its own midpoint rather than at a
+    # shared index.  Indexing the lightcone with HII_DIM // 2 happened to stay
+    # in range whenever N_z > HII_DIM / 2, and raised IndexError as soon as it
+    # did not — see tests/test_figures.py.
+    slice_index = data.brightness_temp_field.shape[2] // 2
+    slice_z_mpc = 0.5 * data.BOX_LEN
     slice_width_mpc = 2 * data.cell_size
 
     in_slice = np.abs(coords_mpc[:, 2] - slice_z_mpc) < slice_width_mpc
