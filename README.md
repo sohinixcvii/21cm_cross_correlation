@@ -175,7 +175,10 @@ changing any of them needs `--sim force` to take effect:
 `BOX_LEN`, `HII_DIM` and `DIM` are **derived**, not hardcoded:
 `survey_area_to_box_size()` turns the footprint into 486.33 Mpc / 256 / 768 at a
 2.0 Mpc target cell size. [`docs/HPC.md`](docs/HPC.md) §13 is the checklist of
-what must be set on a new cluster and which edits need `--sim force`.
+what must be set on a new cluster and which edits need `--sim force`;
+[`docs/simulation_spec.md`](docs/simulation_spec.md) is the same configuration
+projected forward to the production run — every derived number, the compute,
+memory and storage it needs, and the two blockers in front of it.
 
 > **The committed $z$ range is a deliberate thin slab**, $\Delta z = 0.01$
 > ($L_\mathrm{LOS} = 3.5$ Mpc at $z = 7$). The power-spectrum estimator in
@@ -335,6 +338,7 @@ to cap the memory footprint.
 |----------|----------|
 | [`docs/reference.md`](docs/reference.md) | **The long-form companion to this README** — notebook structure, equations and fiducial parameters; the literature relations overlaid on each figure; the 21cmFAST v4 `HaloBox`/lightcone API notes and source-model templates; the `src/` function reference; and the full bibliography |
 | [`PIPELINE.md`](PIPELINE.md) | HPC pipeline summary, Mermaid flowchart, stage table, and the `lightcone_data.h5` schema |
+| [`docs/simulation_spec.md`](docs/simulation_spec.md) | **The planned run's specification and its cost** — every parameter and derived number for the production lightcone ($z = 6.55$–$7.45$ in the footprint-derived box), the compute / memory / scratch / wall-time requirements with their measured baselines, the two blockers that stand in front of it, a SLURM template, and what to look up about a new cluster to firm up the wall-time estimate |
 | [`docs/HPC.md`](docs/HPC.md) | **Parameter-level ground truth for the HPC run** — every configuration value, derived quantity, formula with its evaluated number at $z=7$, file written, disk footprint, and known inconsistency. **§13 is the user-defined parameter checklist** |
 | [`docs/uncertainty_budget.md`](docs/uncertainty_budget.md) | **The uncertainty budget, end to end** — every formula of the photo-$z$ / wedge / noise / SNR chain with its evaluated number at $z=7$, the audit against the source notebook, the CLI overrides, the HDF5 schema, and what the calculation still does not do |
 | [`CHANGELOG.md`](CHANGELOG.md) | Chronological record of all changes, including corrected literature values |

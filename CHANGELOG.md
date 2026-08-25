@@ -7,6 +7,111 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Planned-run specification, 2026-08-24 ───────────────────────────── -->
+
+### Added
+
+- **`docs/simulation_spec.md` — the specification and cost of the run that has
+  not happened yet.** `docs/HPC.md` documents the run *as the code stands*;
+  this is the forward-looking companion: the production lightcone at
+  *z* = 6.55–7.45 in the footprint-derived 486.33 Mpc / 256³ box, with every
+  parameter, every derived number, and what it will cost to run.
+
+  Every number carries its provenance — **[M]** measured, **[E]** extrapolated,
+  **[C]** computed for the document, **[T]** a target — because the mix was
+  previously invisible and the extrapolations are load-bearing.
+
+  | Requirement | Figure |
+  |---|---|
+  | Cores | 16 per task **[T]** |
+  | Memory | 128 GB requested; ~56 GB peak resident **[E]** |
+  | Scratch | 300 GB requested; ~245 GB cache + ~19 GB output **[E]** |
+  | Wall time | request 6 h; 0.5–1.5 h on 16 cores, 2–4 h on 1 core **[E]** |
+
+  The wall-time extrapolation rests on the only end-to-end timings this project
+  has: **543.5 s wall / 567.4 s CPU** for the 2026-08-12 run at 256 Mpc / 128³
+  / 5 nodes, effectively single-threaded, reproduced by the 2026-08-07 run to
+  within one second **[M]**. Stage 1 is 96 % of it (520.1 s); the power spectra
+  took 0.8 s. Scaling is 6.86× (volume) × 1.8× (nodes) ≈ 12.3× of serial work.
+
+  The document also carries the derived geometry of the planned range **[C]**:
+  L_LOS = 315.598 Mpc, `N_z` = 166, 9 node redshifts with *z* = 7.0 landing
+  exactly on node 5, 168.095–188.133 MHz (20.038 MHz), Δk⊥ = 0.01292 and
+  Δk∥ = 0.01991 Mpc⁻¹; a SLURM template; and §9, which lists what is needed
+  about a target cluster to turn the wall-time range into a number, with the
+  commands that produce it (`lscpu`, `sinfo`, `scontrol show partition`,
+  `lfs quota`, `sacct`, `seff`).
+
+### Two findings worth recording
+
+- **The `L_los` discrepancy does not survive the wider range.** `HPC.md` §11.1
+  records the stored `L_los` (200.0 Mpc) disagreeing with the data's actual
+  3.5 Mpc span by a factor 56.5. At *z* = 6.55–7.45 the recorded value —
+  `N_z` × transverse cell — is **315.354 Mpc against a true 315.598, a 0.08 %
+  difference [C]**. The factor 56.5 was `minimum_los_slices` flooring a
+  two-slice slab to 100, not a defect in the geometry, and it disappears the
+  moment the natural `N_z` binds.
+
+- **Raising the sampler floor is a cheap way past `INT_MAX`, and now has a
+  number attached.** At 486.33 Mpc the flattened `halo_coords` is 1.31×
+  `INT_MAX` **[E]** — the 2026-08-20 SIGSEGV. Against a Sheth-Tormen mass
+  function at *z* = 7 weighted by 21cmFAST's own
+  f_★ ∝ (M/10¹⁰)^0.5 exp(−`M_TURN`/M), moving `SAMPLER_MIN_MASS` from 10⁸ to
+  **2 × 10⁸ M☉ keeps 46.2 % of the halos and 99.84 % of the star formation
+  [C]** — headroom 0.60, catalogue 12.1 GB. The halos it drops sit far below
+  the M_TURN = 5 × 10⁸ turnover. The document still recommends the 350 Mpc
+  box (headroom 0.49) as the first attempt, because that leaves the physics
+  untouched and calibrates the extrapolations; the mass floor is the fallback
+  if the full 10 deg² footprint is required.
+
+### Changed
+
+- **Costed against the target machine, 2026-08-24.** `lscpu` and `df -hT` on
+  the machine the run will use replaced most of the document's [T] guesses
+  with [M] facts, and one of them changes the shape of the run:
+
+  | | |
+  |---|---|
+  | Host | `andromeda1.jb.man.ac.uk` — **the same machine the 2026-08-12 baseline was measured on** |
+  | CPU | 2 × AMD EPYC 9374F (Zen 4), 64 physical cores / 128 logical, 3.85 GHz base |
+  | RAM | 1.5 TiB, 1.4 TiB available (`free -h`) — the 56 GB peak is 1/25 of it |
+  | Scratch | local NVMe/XFS: `/nvme1` 851 GB free, `/nvme4` 836 GB free |
+  | Home | NFS, **144 GB free** — cannot hold the 245 GB cache |
+  | Scheduler | **none** — `sinfo`, `scontrol`, `sacct`, `sacctmgr` all absent |
+
+  Because the host is the baseline's own host, the serial scaling carries **no
+  cross-machine correction** — the extrapolation is across box sizes only, and
+  the sole remaining assumption in the wall-time figure is the OpenMP
+  speed-up, which one smoke-test run settles.
+
+  Consequences: the wall-time estimate drops to **15–40 min at 32 threads**
+  (budget 1 h) from 0.5–1.5 h on a hypothetical 16-core node; memory stops
+  being a constraint at any box size; §8 becomes a `tmux` + `numactl` launch
+  recipe rather than a SLURM script (the `#SBATCH` version is kept folded away
+  for a future move to CSD3); and I/O drops to ~2–4 min on local NVMe.
+
+  **Two new hazards, both specific to an unscheduled machine.** `R7` —
+  `resolve_n_threads()` falls through to `os.cpu_count()` when there is no
+  `SLURM_CPUS_PER_TASK`, which is **128** here: every SMT thread of a shared
+  workstation. `N_THREADS=32` must be set explicitly. `R3` — `$HOME` is NFS
+  with 144 GB free, so a run launched from the home directory dies partway
+  through writing a 245 GB cache.
+
+  The 1.5 TiB does **not** unblock the 486.33 Mpc box: `halo_coords` is
+  1.31 × `INT_MAX` whatever the node has. Abundant memory removes a worry the
+  2026-08-20 post-mortem had to rule out; it does not remove the blocker.
+
+- **`NUMBERS_AND_SOURCES.md`**: the two `M_cell` entries in §1 still quoted the
+  retired 256 Mpc / 128³ grid (`1.175e10` / `3.173e11` M☉) and now carry the
+  footprint-derived values (**`1.007e10` / `2.720e11` M☉**, `DIM` = 768 /
+  `HII_DIM` = 256), with the old numbers named. New **§10** records the planned
+  run's derived quantities and cost estimates with the same [M]/[E]/[C]
+  provenance marks.
+
+- **`README.md`**: `docs/simulation_spec.md` added to the documentation table
+  and cross-referenced from the derived-geometry note in the configuration
+  section.
+
 <!-- ─── Mode weighting + physical HERA noise, 2026-08-21 ────────────────── -->
 
 ### Added

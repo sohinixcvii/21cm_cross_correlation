@@ -12,6 +12,11 @@ physical constants — their `slab_cells`, `smooth_cells` and contour quantiles
 are display-only choices, documented as such in the function docstrings and
 deliberately not listed here.
 
+**Updated 2026-08-24.** The two `M_cell` entries in §1 were still quoting the
+retired 256 Mpc / 128³ grid and now carry the footprint-derived values; §10 is
+new, holding the derived numbers of the planned production run
+([`docs/simulation_spec.md`](docs/simulation_spec.md)).
+
 **Updated 2026-08-21.** Several entries previously marked *Source not yet
 confirmed* have been traced and are now cited: the `T_sys` model (21cmSense),
 the dish diameter and array layout (DeBoer et al. 2017), and the 21 cm rest
@@ -35,8 +40,8 @@ supplied reference list; it is flagged rather than assigned a guessed citation.
 | `delta_c` | `1.686` | `conversions.sheth_tormen_bias()` | **Source not yet confirmed** — linear collapse threshold, not on the supplied list |
 | `dlog10m` | `0.02` | `analysis.effective_galaxy_bias()`, `run_simulation.py` §4 `MassFunction` | Internal to pipeline config — mass-function grid resolution [dex] |
 | `F_STAR10` | `0.05` | `run_simulation.py` §4, `f_star()` | Park et al. (2019) SFE model, via Mesinger & Furlanetto (2007) and Murray et al. (2020) |
-| `M_cell` (density grid, `DIM`) | `1.175e10` M☉ | `run_simulation.py` §1, `cell_mass(hires_cell_size, …)` | Internal to pipeline config — grid resolution mass |
-| `M_cell` (21 cm / ionisation grid, `HII_DIM`) | `3.173e11` M☉ | `run_simulation.py` §1, `cell_mass(cell_size, …)` | Internal to pipeline config — grid resolution mass |
+| `M_cell` (density grid, `DIM`) | `1.007e10` M☉ | `run_simulation.py` §1, `cell_mass(hires_cell_size, …)` | Internal to pipeline config — grid resolution mass. **Updated 2026-08-24**: `DIM` = 768 at `BOX_LEN` = 486.33 Mpc (0.6332 Mpc cell); was `1.175e10` on the retired 256 Mpc / `DIM` = 384 grid |
+| `M_cell` (21 cm / ionisation grid, `HII_DIM`) | `2.720e11` M☉ | `run_simulation.py` §1, `cell_mass(cell_size, …)` | Internal to pipeline config — grid resolution mass. **Updated 2026-08-24**: `HII_DIM` = 256 at `BOX_LEN` = 486.33 Mpc (1.8997 Mpc cell); was `3.173e11` on the retired 256 Mpc / 128³ grid |
 | `M_TURN` | `5e8` M☉ | `run_simulation.py` §4, `f_star()` | Star-formation turnover mass threshold (Park et al. 2019 SFE model) |
 | `M_UV_bright` | `-22` | `run_simulation.py` config; `run_pipeline.py` `--m-uv-bright` | **Source not yet confirmed** — bright-end selection cut |
 | `M_UV_limit` / `M_UV_faint` | `-18` | `run_simulation.py` config; `analysis.select_euclid_halos()` | **Source not yet confirmed** — Euclid faint magnitude cut |
@@ -280,6 +285,52 @@ halo-catalogue cost estimate; nothing downstream consumes it.
 These are **internal empirical calibrations, not literature values**. They
 extrapolate this project's own measurements and are accurate only for runs
 sharing the reference run's redshift, cosmology and sampler settings.
+
+---
+
+## 10. Planned production run — derived numbers
+
+Computed 2026-08-24 for [`docs/simulation_spec.md`](docs/simulation_spec.md),
+which specifies the run at *z* = 6.55–7.45 in the footprint-derived box. These
+are **derived**, not configured: nothing in the code stores them, and they
+change the moment `z_min`/`z_max`, `BOX_LEN` or the footprint does. Marked
+**[C]** computed here, **[E]** extrapolated from a measured run,
+**[M]** measured.
+
+| Quantity | Value | How obtained |
+|---|---|---|
+| `BOX_LEN` / `HII_DIM` / `DIM` | 486.329 Mpc / 256 / 768 | `conversions.survey_area_to_box_size(10.0, 7.0, 0.90)` **[C]** |
+| Transverse / high-res cell | 1.8997 / 0.6332 Mpc | `BOX_LEN` / grid **[C]** |
+| Survey LOS depth L∥ | 315.598 Mpc | `Planck18.comoving_distance` differenced over 6.55–7.45 **[C]** |
+| `N_z` / LOS slice spacing | 166 / 1.9012 Mpc | `round(L_los / cell)`, floor idle **[C]** |
+| LOS spacing spread, first → last cell | 2.0803 → 1.7599 Mpc = 16.75 % | `np.diff` of `Planck18.comoving_distance(linspace(6.55, 7.45, 166))` **[C]** — quantifies `TODO.md` §P0.1 at the planned range |
+| Node redshifts | 9, step 0.1125, *z* = 7.0 exactly on node 5 | `max(round(10 Δz), 5)` **[C]** |
+| Observed frequency span | 168.095 – 188.133 MHz = 20.038 MHz | `F_21_MHZ / (1 + z)` **[C]** — a 2.50× mismatch against the 8 MHz noise `bandwidth` (`TODO.md` §P0.4) |
+| Δk⊥ / Δk∥ | 0.01292 / 0.01991 Mpc⁻¹ | 2π/L **[C]** |
+| k_Nyq,⊥ / k_Nyq,∥ | 1.6537 / 1.6524 Mpc⁻¹ | π/cell **[C]** |
+| Recorded `L_los` vs true LOS span | 315.354 vs 315.598 Mpc = 0.08 % | `N_z` × transverse cell **[C]** — `HPC.md` §11.1's 56.5× discrepancy is an artifact of the floored slab and does not recur here |
+| Photo-*z* kernel W at k∥ = 0.0199 / 0.1084 Mpc⁻¹ | 7.3 × 10⁻³ / 5.2 × 10⁻⁶⁴ | exp(−k∥²σ_r²/2) at σ_r = 157.48 Mpc **[C]** |
+| Halos, Lagrangian / perturbed | 9.37 × 10⁸ / 7.84 × 10⁸ | `provenance.estimate_catalogue_cost(486.33)` **[E]** |
+| Catalogue on disk / resident while perturbing | 26.2 / 48.2 GB | same **[E]** |
+| `int32_headroom` | **1.31 — over `INT_MAX`** | same **[E]** |
+| Box length at headroom 1.0 / 0.5 | 444.6 / 352.9 Mpc | inverting `HALOS_PER_MPC3` **[C]** |
+| Halo count retained by `SAMPLER_MIN_MASS` 1.5 / 2 / 3 × 10⁸ M☉ | 63.1 % / 46.2 % / 28.7 % | Sheth-Tormen `hmf.MassFunction(z=7, dlog10m=0.02)` cumulative counts **[C]** |
+| Star formation retained by the same floors | 99.95 % / 99.84 % / 99.44 % | same, weighted by M · f_★ with f_★ ∝ (M/10¹⁰)^0.5 exp(−`M_TURN`/M) **[C]** |
+| Stored HDF5 | ~19.1 GB (18.8 GB catalogue at 24 B/halo) | **[E]** |
+| 21cmFAST cache | ~245 GB (7.7 GB ICs + 26.4 GB × 9 nodes) | scaled from the measured 0.96 GB / 3.83 GB-per-node at 256 Mpc **[E]** |
+| Peak resident memory | ~56 GB | **[E]** |
+| Serial simulation cost vs the 256 Mpc baseline | ~12.3× → 2–4 h on one core | 6.86 (volume) × 1.8 (nodes) applied to a measured 520 s Stage 1 **[E]** |
+| Measured baseline wall / CPU (256 Mpc, 128³, 5 nodes, 1 thread) | 543.5 s / 567.4 s = 0.163 CPU-h | 2026-08-12 run, reproduced by 2026-08-07 to within 1 s **[M]** |
+| Target machine CPU | 2 × AMD EPYC 9374F, 64 physical / 128 logical cores, 3.85 GHz base | `lscpu`, 2026-08-24 **[M]** |
+| Target machine RAM | 1.5 TiB total, 1.4 TiB available, 4 GiB swap | `free -h`, 2026-08-24 **[M]** |
+| Target machine host | `andromeda1.jb.man.ac.uk` — the same host as the 2026-08-12 baseline | confirmed 2026-08-24 **[M]**; the serial runtime scaling therefore carries no cross-machine correction |
+| Target machine scratch | `/nvme1` 851 GB free, `/nvme4` 836 GB free (XFS on NVMe); `$HOME` NFS, 144 GB free | `df -hT`, 2026-08-24 **[M]** |
+| Target machine scheduler | none — `sinfo`/`scontrol`/`sacct`/`sacctmgr` absent | 2026-08-24 **[M]** |
+| Planned-run wall time | 15–40 min at 32 threads; budget 1 h | 6,400 s serial ÷ an assumed 8–14× OpenMP speed-up **[E]** |
+
+**[M]** rows are citable as this project's own measurements. **[E]** rows
+inherit the caveat on §9: they extrapolate one run's sampler settings,
+redshift and cosmology, and are guards, not budgets.
 
 ---
 

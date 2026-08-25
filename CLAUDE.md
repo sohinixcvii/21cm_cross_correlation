@@ -54,3 +54,4 @@ hand back broken code.
 - Do not commit anything. 
 - Always update README files with latest information.
 - Always update CHANGELOG with latest changes.
+- Whenever any numbers or formulae are updated, update NUMBERS_AND_RESOURCES.md to reflect the latest changes
