@@ -23,6 +23,19 @@ lives in [`docs/reference.md`](docs/reference.md).
 
 ## Quickstart
 
+### 0. Complete, physical run:
+
+```
+conda run -n 21cmfast python run_pipeline.py \
+  --sim force \
+  --analysis force \
+  --estimator auto \
+  --noise-model physical \
+  --mode-weighted \
+  --plots all \
+  --format pdf --dpi 300
+```
+
 ### 1. Install
 
 ```bash
