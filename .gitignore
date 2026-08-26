@@ -30,6 +30,7 @@ outputs/smoke_test/
 
 # Reference literature (local only, not part of repo)
 resources/
+CLAUDE.md
 
 # Editor settings (local only)
 .vscode/
