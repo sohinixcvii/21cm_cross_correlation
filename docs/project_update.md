@@ -101,8 +101,8 @@ bias-derived quantities change (§4).
 | Parameter | Value |
 |---|---|
 | UV magnitude window | −22 ≤ M_UV ≤ −18 (AB mag) |
-| Photo-z uncertainty | **σ_z = 0.45** (absolute, not σ_z/(1+z); was 0.059 — corrected 2026-08-12, see `docs/HPC.md` §11.8) |
-| Target galaxy number density | n̄ = 3 × 10⁻³ h³ Mpc⁻³ |
+| Photo-z uncertainty | **σ_z = 0.256** (absolute, not σ_z/(1+z)) — Euclid Collab.: Allen et al. (2026), A&A 711, A25, Sect. 3 / Fig. 4, measured σ_nmad ≤ 0.032 × (1+z). Supersedes 0.45 (the pre-launch *requirement*) and, before that, 0.059 (the fractional value used as absolute). Two open caveats: `NUMBERS_AND_SOURCES.md` §5 |
+| Target galaxy number density | n̄ = 7.48 × 10⁻⁵ Mpc⁻³ (Euclid Collab.: Allen et al. (2026), A&A 711, A25, Table 2; plain Mpc⁻³, not h³ Mpc⁻³) |
 | Halos in the window *(superseded run)* | **49,315** |
 | Halos brighter than −18, no bright cut | 49,621 |
 | Fraction Euclid-detected | ~0.04 % of all halos |

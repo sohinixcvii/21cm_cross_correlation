@@ -7,6 +7,191 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── M_UV/m_AB conversion + kappa_UV corroboration, 2026-08-27 ───────── -->
+
+### Added
+
+- **`conversions.mab_to_Muv()` / `conversions.Muv_to_mab()`** — the
+  apparent↔absolute UV magnitude conversion, which the codebase did not have.
+  Every magnitude quantity was absolute ($M_{\rm UV}$); there was no distance
+  modulus, no `luminosity_distance` call, and no way to express a survey's
+  point-source depth (an *apparent* magnitude) in the pipeline's own units.
+
+  $$M_{\rm UV} = m_{\rm AB} - DM(z) + 2.5\log_{10}(1+z),\qquad
+  DM(z) = 5\log_{10}(D_L/10\,{\rm pc})$$
+
+  Matches **Euclid Collaboration: Allen et al. (2026), A&A 711, A25, Eq. 15**.
+  Their $\Delta M_{\rm loss}$ term is deliberately omitted: it corrects for
+  absorption entering the $H_E$ band and applies only at $z > 10$, not at this
+  pipeline's $z \simeq 7$. Distances use `astropy.cosmology.Planck18`, the
+  object already adopted throughout `src/conversions.py`.
+
+- **Eight tests in `tests/test_conversions.py`** covering the new pair: the
+  reference point, the default-cosmology check, both round-trip directions,
+  cosmology insensitivity, vectorisation, and two monotonicity properties.
+
+  The benchmark asserted is **$m_{\rm AB} = 25$, $z = 7 \Rightarrow M_{\rm UV}
+  \approx -22$** (Planck18 gives −21.983; tolerance 0.05 mag). A comment in
+  the test file records that $m_{\rm AB} = 24 \Rightarrow M_{\rm UV} = -22$ is
+  **not** correct — that point actually gives −22.98, a full magnitude
+  brighter — so the benchmark is not silently "fixed" to it later. Cosmology
+  sensitivity is 0.033 mag between Planck18 and the Allen et al. cosmology
+  ($\Omega_m = 0.27$, $H_0 = 70$), well inside tolerance.
+
+### Changed
+
+- **`_KAPPA_UV_MADAU14` documentation — second, corroborating citation. No
+  value change.** **Dhandha et al. (2026)**, MNRAS in press,
+  [arXiv:2508.13761](https://arxiv.org/abs/2508.13761), Eq. 18, independently
+  uses and confirms the identical $1.15\times10^{-28}$. Recorded in both the
+  module comment and `NUMBERS_AND_SOURCES.md` §2 explicitly as a **confirming
+  independent source, not the origin** — Madau & Dickinson (2014) remains the
+  primary citation. The §2 entry's journal reference is corrected in passing
+  from "ApJ" to **ARA&A 52, 415**, which is what the module comment already
+  said and what the paper actually is.
+
+<!-- ─── Photo-z uncertainty re-sourced, 2026-08-27 ──────────────────────── -->
+
+### Changed
+
+- **`photoz_uncertainty` $\sigma_z$: 0.45 → 0.256 (science-affecting).**
+  §11.8 fixed the absolute-vs-fractional *convention* but left a value derived
+  from Euclid's **pre-launch requirement** $\sigma_z/(1+z) < 0.05$ — a
+  specification, not a measurement, whose arithmetic never closed (0.45
+  implies 0.056, exceeding the requirement it cited). The value now comes from
+  **Euclid Collaboration: Allen et al. (2026), A&A 711, A25**, Sect. 3 and
+  Fig. 4: $\sigma_{\rm nmad} \le 0.032$, the *measured* scatter between true
+  and photometric redshift in their synthetic Euclid Deep Field catalogue
+  test, converted on the standard NMAD normalisation as
+  $0.032 \times (1+7) = 0.256$.
+
+  **Unit convention confirmed before substituting:** `radial_smearing_length`
+  computes $\sigma_r = c\sigma_z/H(z)$ and its docstring states
+  "**absolute — not $\sigma_z/(1+z)$**", so 0.256 (already multiplied by
+  $1+z$) is what goes in.
+
+  **Two caveats preserved, not resolved** — in the config comment,
+  `NUMBERS_AND_SOURCES.md` §5, and new `docs/HPC.md` §11.11:
+  1. *Field mismatch.* 0.032 is an upper bound across EDF-N/S/F with **EDF-N
+     explicitly the worst**; this pipeline is **EDF-Fornax**, likely better.
+     The field-specific number exists only as an annotation inside the Fig. 4
+     image and was not extractable. We adopt the **conservative worst-field
+     bound**, not the field-specific value.
+  2. *Normalisation ambiguity.* The caption describes $\sigma_{\rm nmad}$ as
+     scatter in $z_{\rm true} - z_{\rm phot}$ without stating the $(1+z)$
+     normalisation in visible text. The conversion **assumes** the standard
+     normalised definition; if a later reading contradicts it, $\sigma_z$
+     would be 0.032 and $\sigma_r \approx 11$ Mpc — a factor 8 smaller.
+
+  **Alternative sources documented but not adopted** (neither exposes an
+  extractable $\sigma_{\rm NMAD}$ in accessible text; both recorded in
+  `NUMBERS_AND_SOURCES.md` §5 as leads for a manual figure read):
+  **Varadaraj et al. (2026)**, A&A 707, A239 (arXiv:2510.00945), bright
+  $z\simeq7$ LBGs at $6.5 \le z \le 7.5$ — a far tighter redshift match than
+  Allen's $6 \le z < 8$ bin, but the COSMOS field rather than an EDF; and
+  **Weaver et al. (2025)**, A&A 697, A16 (arXiv:2405.13505), luminous
+  $z = 6$–8 galaxies in the ERO *Magnifying Lens* Abell cluster fields,
+  restricted to NISP-only sources.
+
+  **Downstream at $z_{\rm obs} = 7$:**
+
+  | Quantity | 0.45 | **0.256** |
+  |---|---|---|
+  | $\sigma_r$ | 157.48 Mpc | **89.59 Mpc** |
+  | `SURVEY_DELTA_Z` | 0.90 | **0.512** |
+  | Survey-derived $z$ range | 6.550–7.450 | **6.744–7.256** |
+  | Survey-derived $L_{\rm LOS}$ | 315.60 Mpc | **179.30 Mpc** |
+  | `BOX_LEN` / `HII_DIM` / `DIM` | 486.33 / 256 / 768 | **unchanged** |
+  | $k_\parallel$ where $W = 0.5$ | 0.00748 | **0.01314** Mpc⁻¹ |
+
+  **$\sigma_z$ cancels out of the box-relative damping.** `SURVEY_DELTA_Z`
+  $= 2N_\sigma\sigma_z$ and $\sigma_r \propto \sigma_z$, so
+  $L_{\rm LOS}/\sigma_r = 2\,$`PHOTOZ_N_SIGMA` **exactly, for any**
+  $\sigma_z$; the kernel at the box's fundamental mode is pinned at
+  $W = e^{-\pi^2/2} = 0.0072$ regardless. The gain is against the *wedge*
+  (fixed in physical $k$): $W$ at $k_\parallel = 0.1118$ improves from
+  $4.9\times10^{-68}$ to $1.6\times10^{-22}$ — 46 orders of magnitude, still
+  unusable. **§11.8's conclusion stands.**
+
+  **Call sites updated:** `run_simulation.py` (value, full provenance block,
+  the `PHOTOZ_N_SIGMA` worked examples, and the `SURVEY_Z_MIN`/`SURVEY_Z_MAX`
+  inline comments), `run_pipeline.py` (`resolve` fallback, `--sigma-z` help
+  text, docstring), `src/conversions.py` (`survey_area_to_box_size` Notes).
+  **Docs:** `NUMBERS_AND_SOURCES.md` §5 (entry, both caveats, the alternative
+  sources, the structural note, and a before/after table), new
+  `docs/HPC.md` §11.11 plus §5.2, `README.md`, `docs/reference.md`,
+  `docs/uncertainty_budget.md`, `docs/project_update.md`,
+  `docs/simulation_spec.md`.
+
+  **Not yet in effect.** `run_pipeline.py` reads `photoz_uncertainty` from the
+  HDF5 root attrs, so `outputs/lightcone_data.h5` keeps 0.45 until
+  `bash submit_job.sh --sim force` or an attribute patch (`docs/HPC.md` §11.7).
+
+<!-- ─── Galaxy number density sourced, 2026-08-27 ───────────────────────── -->
+
+### Changed
+
+- **`mean_galaxy_density` $\bar n$: 3 × 10⁻³ → 7.48 × 10⁻⁵ Mpc⁻³
+  (science-affecting).** The old value was flagged *"Source not yet
+  confirmed — survey number density"* in `NUMBERS_AND_SOURCES.md` §2. It is
+  now derived from **Euclid Collaboration: Allen et al. (2026), A&A 711,
+  A25**, *"Euclid Quick Data Release (Q1) XXV. Hunting for luminous $z>6$
+  galaxies in the Euclid Deep Fields"* — Table 2 (p. 9), row $6 \le z < 8$,
+  column `Selected(DPL)`: $N = 70\,445 \pm 265$ galaxies over the full
+  53 deg² survey to 26.5 AB depth, divided by the comoving volume of that
+  53 deg², $6 < z < 8$ shell, $V = 3.2285\times10^{8}\ (h^{-1}\,$Mpc$)^3$:
+
+  $$\bar n = N/V = 2.18\times10^{-4}\ h^3\,\mathrm{Mpc}^{-3}
+  = 7.48\times10^{-5}\ \mathrm{Mpc}^{-3}\quad (h = 0.7)$$
+
+  **The substituted value is the plain-Mpc⁻³ one.** A grep of every consumer
+  shows **no factor of $h^3$ is applied to this parameter anywhere**:
+  `src.analysis.compute_uncertainty_budget` forms
+  $P_{N,\mathrm{gal}} = 1/\bar n$ alongside `P_galaxy_auto` in mK² Mpc³, and
+  `run_simulation.py` §3b forms $\bar n \times$ `cell_volume` with
+  `cell_volume` in Mpc³. The old `[h^3 Mpc^-3]` label was inert. This
+  resolves the $h^3$ ambiguity that `docs/HPC.md` §11.7 recorded as
+  *"Unresolved; not tracked in `TODO.md`"*.
+
+  **Consequence:** the net change is a factor **40.1**, not the ~13.8 that
+  substituting the $h^3$-scaled 2.18 × 10⁻⁴ would have given — part genuine
+  (the Euclid-sourced density is lower than the placeholder), part correcting
+  the inert label. $P_{N,\mathrm{gal}}$ goes **333.33 → 13 368.98 Mpc³**. The
+  shot-noise term is now ~40× larger and correspondingly more dominant in the
+  galaxy leg of the cross-power variance; the $1/\bar n$ formula itself is
+  unchanged and needed no adjustment.
+
+  > **Caveat preserved, not resolved.** $V$ was computed with the cosmology
+  > Allen et al. state at the end of their Sect. 1 ($\Omega_m = 0.27$,
+  > $\Omega_\Lambda = 0.73$, $H_0 = 70$), **not** the Planck18 cosmology this
+  > pipeline adopts elsewhere ($\Omega_m = 0.3111$, $H_0 = 67.66$).
+  > Recomputing $V$ under Planck18 would shift $\bar n$; that is a decision
+  > for the paper's authors and has deliberately **not** been applied. The
+  > mismatch is flagged in `run_simulation.py` next to the value, in
+  > `NUMBERS_AND_SOURCES.md` §2, and in `docs/HPC.md` §11.10.
+
+  **Call sites updated:** `run_simulation.py` (config value, provenance
+  comment, and the two `Shot-noise n̄` print labels, which said `h³ Mpc⁻³`),
+  `run_pipeline.py` (`data.get` fallback), `src/analysis.py`
+  (`compute_uncertainty_budget` default and both docstrings, now carrying
+  units). **Deliberately not updated:** `tests/conftest.py` and
+  `tests/test_uncertainty_budget.py` keep 3 × 10⁻³ — the latter is explicitly
+  `NB_MEAN_GALAXY_DENSITY`, the notebook-reproduction constant, and both
+  derive their expected $P_{N,\mathrm{gal}}$ from their own fixture value, so
+  they stay self-consistent.
+
+  **Docs:** `NUMBERS_AND_SOURCES.md` §2 (entry rewritten with the full
+  citation, the $N/V$ derivation, a cosmology-caveat block and a
+  unit-convention block; the *sources not yet confirmed* roll-up drops from
+  18 to 17), new `docs/HPC.md` §11.10 plus §5.4, §11.7 and the §12 reference
+  table, `README.md`, `docs/reference.md`, `docs/project_update.md`.
+
+  **Not yet in effect.** `run_pipeline.py` reads `mean_galaxy_density` from
+  the HDF5 root attrs, so `outputs/lightcone_data.h5` keeps 3 × 10⁻³ until
+  `bash submit_job.sh --sim force` or an attribute patch (`docs/HPC.md`
+  §11.7). The new value in `run_pipeline.py` / `src/analysis.py` is a
+  fallback for files missing the attribute.
+
 <!-- ─── Smoke-test follow-ups, 2026-08-25 ──────────────────────────────── -->
 
 ### Changed

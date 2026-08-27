@@ -1785,7 +1785,7 @@ class UncertaintyBudget:
     integration_time, bandwidth : float
         Instrument configuration [s], [Hz].
     mean_galaxy_density : float
-        n̄ used for the shot noise.
+        n̄ used for the shot noise [Mpc^-3].
     noise_model : str
         Which thermal-noise model produced ``snr.P_noise_21cm`` —
         ``'scaling'`` or ``'physical'``.
@@ -1920,7 +1920,7 @@ def compute_uncertainty_budget(
     wedge_buffer: float = 0.0677,
     integration_time: float = 1000 * 3600,
     bandwidth: float = 8e6,
-    mean_galaxy_density: float = 3e-3,
+    mean_galaxy_density: float = 7.48e-5,
     dish_diameter: float = 14.0,
     f_21_hz: float = 1420.405e6,
     speed_of_light_mps: float = 3e8,
@@ -1958,7 +1958,9 @@ def compute_uncertainty_budget(
     bandwidth : float, optional
         Per-band bandwidth [Hz].
     mean_galaxy_density : float, optional
-        n̄ for the shot noise ``P_N,gal = 1/n̄``.
+        n̄ for the shot noise ``P_N,gal = 1/n̄`` [Mpc^-3]. Euclid Collab.:
+        Allen et al. (2026), A&A 711, A25, Table 2; see NUMBERS_AND_SOURCES.md
+        §2 for the derivation and the cosmology caveat.
     dish_diameter : float, optional
         Dish diameter [m], for the FoV wedge line.
     f_21_hz : float, optional
@@ -2191,8 +2193,17 @@ def euclid_sfr_window(
 
     Notes
     -----
-    Uses the Madau & Dickinson (2014) UV–SFR calibration
-    (κ_UV = 1.15e-28, Chabrier IMF) via ``src.conversions``.
+    Uses the adopted UV–SFR calibration κ_UV = 2.7e-29 via
+    ``src.conversions`` — Fisher et al. (2026), arXiv:2511.10741, Eq. 12.
+
+    .. warning::
+       That κ_UV recovers ``SFR_100Myr`` from *rising* SFHs, while the
+       ``halo_sfr`` this window is applied to is 21cmFAST's
+       ``M_star / t_sf`` with ``t_sf = 570.3 Myr`` at z = 7 (Park et al.
+       2019, Eq. 3).  The two are not the same quantity, so this window's
+       meaning — not merely its numbers — is an open question.  See the
+       ``_KAPPA_UV_MADAU14`` definition in ``src/conversions.py`` and
+       ``NUMBERS_AND_SOURCES.md`` §2.
     """
     return (
         float(Luv_to_sfr(Muv_to_Luv(M_UV_faint))),
@@ -2363,8 +2374,10 @@ def effective_galaxy_bias(
 #                  up-weighted, which is closer to what a flux-limited
 #                  intensity-mapping style measurement responds to.
 #
-# L_UV comes from sfr_to_Luv() (Madau & Dickinson 2014, kappa_UV =
-# 1.15e-28); this module only consumes it.
+# L_UV comes from sfr_to_Luv() (Fisher et al. 2026, arXiv:2511.10741 Eq. 12,
+# kappa_UV = 2.7e-29); this module only consumes it.  The value cancels out of
+# an overdensity, so the weighting mode is insensitive to it -- see
+# tests/test_galaxy_weighting.py.
 
 GALAXY_WEIGHTING_MODES: Tuple[str, ...] = ("number", "luminosity")
 
@@ -2506,8 +2519,9 @@ def galaxy_overdensity_from_catalogue(
     Notes
     -----
     ``L_UV`` is obtained from :func:`src.conversions.sfr_to_Luv`, i.e.
-    ``L_UV = SFR / kappa_UV`` with ``kappa_UV = 1.15e-28`` (Madau &
-    Dickinson 2014).  Because that conversion is a constant rescaling, the
+    ``L_UV = SFR / kappa_UV`` with ``kappa_UV = 2.7e-29`` (Fisher et al.
+    2026, arXiv:2511.10741, Eq. 12).  Because that conversion is a
+    constant rescaling, the
     luminosity-weighted field is identical to an SFR-weighted one; it
     differs from the number-weighted field only through the per-halo
     spread in SFR.

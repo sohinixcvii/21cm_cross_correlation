@@ -10,7 +10,9 @@ from astropy.cosmology import Planck18
 
 from src.conversions import (
     SimulationBox,
+    Muv_to_mab,
     cell_mass,
+    mab_to_Muv,
     mean_matter_density,
     survey_area_to_box_size,
 )
@@ -213,3 +215,85 @@ def test_survey_area_to_box_size_rejects_bad_input(kwargs) -> None:
     """Non-physical inputs raise rather than returning a silent nonsense box."""
     with pytest.raises(ValueError):
         survey_area_to_box_size(**kwargs)
+
+
+# ---------------------------------------------------------------------------
+#  M_UV <-> m_AB
+#
+#  M_UV = m_AB - DM(z) + 2.5 log10(1 + z), matching Euclid Collaboration:
+#  Allen et al. (2026), A&A 711, A25, Eq. 15 (their Delta M_loss term omitted,
+#  as it applies only at z > 10 in the H_E band).
+# ---------------------------------------------------------------------------
+
+#: Reference point: an m_AB = 25 source at z = 7 is an M_UV ~ -22 galaxy.
+#: Verified by direct calculation under Planck18 (-21.983) and cross-checked
+#: against the Allen et al. cosmology (Omega_m = 0.27, H_0 = 70), which gives
+#: -22.016 -- a 0.033 mag difference, so the benchmark is not
+#: cosmology-sensitive.  The tolerance below absorbs that spread.
+#:
+#: NOTE: m_AB = 24 -> M_UV = -22 is NOT the correct benchmark; m_AB = 24 at
+#: z = 7 gives M_UV = -22.98, a full magnitude brighter.  Do not "fix" these
+#: tests to that value.
+MAB_REFERENCE = 25.0
+Z_REFERENCE = 7.0
+MUV_REFERENCE = -22.0
+MAG_TOLERANCE = 0.05
+
+
+def test_mab_to_Muv_at_the_reference_point() -> None:
+    """m_AB = 25 at z = 7 is an M_UV ~= -22 galaxy under Planck18."""
+    Muv = mab_to_Muv(MAB_REFERENCE, Z_REFERENCE)
+    assert Muv == pytest.approx(MUV_REFERENCE, abs=MAG_TOLERANCE)
+
+
+def test_mab_to_Muv_uses_the_pipeline_cosmology_by_default() -> None:
+    """The cosmo=None default is Planck18, as everywhere else in the module."""
+    assert mab_to_Muv(MAB_REFERENCE, Z_REFERENCE) == pytest.approx(
+        mab_to_Muv(MAB_REFERENCE, Z_REFERENCE, cosmo=Planck18), rel=1e-12
+    )
+
+
+def test_Muv_to_mab_round_trips() -> None:
+    """M_UV -> m_AB inverts m_AB -> M_UV exactly at the reference point."""
+    Muv = mab_to_Muv(MAB_REFERENCE, Z_REFERENCE)
+    assert Muv_to_mab(Muv, Z_REFERENCE) == pytest.approx(
+        MAB_REFERENCE, abs=1e-10
+    )
+
+
+def test_mab_to_Muv_round_trips_from_the_absolute_side() -> None:
+    """The round trip closes starting from M_UV too, across the Euclid window."""
+    for Muv in (-16.0, -18.0, -20.0, -22.0, -22.66):
+        mab = Muv_to_mab(Muv, Z_REFERENCE)
+        assert mab_to_Muv(mab, Z_REFERENCE) == pytest.approx(Muv, abs=1e-10)
+
+
+def test_mab_to_Muv_is_insensitive_to_the_cosmology_choice() -> None:
+    """Planck18 vs the Allen et al. cosmology differ by well under 0.05 mag."""
+    from astropy.cosmology import FlatLambdaCDM
+
+    allen = FlatLambdaCDM(H0=70.0, Om0=0.27)
+    difference = abs(
+        mab_to_Muv(MAB_REFERENCE, Z_REFERENCE)
+        - mab_to_Muv(MAB_REFERENCE, Z_REFERENCE, cosmo=allen)
+    )
+    assert difference < MAG_TOLERANCE
+
+
+def test_mab_to_Muv_is_vectorised() -> None:
+    """A magnitude array converts elementwise."""
+    mab = np.array([24.0, 25.0, 26.0])
+    Muv = mab_to_Muv(mab, Z_REFERENCE)
+    assert Muv.shape == mab.shape
+    # One magnitude fainter apparent is one magnitude fainter absolute.
+    assert np.allclose(np.diff(Muv), 1.0, atol=1e-12)
+
+
+def test_fainter_apparent_magnitude_is_a_fainter_galaxy() -> None:
+    """M_UV increases (fainter) with m_AB at fixed z."""
+    assert mab_to_Muv(26.0, Z_REFERENCE) > mab_to_Muv(25.0, Z_REFERENCE)
+
+
+def test_same_apparent_magnitude_is_brighter_intrinsically_at_higher_z() -> None:
+    """At fixed m_AB, a more distant source must be intrinsically brighter."""
+    assert mab_to_Muv(25.0, 8.0) < mab_to_Muv(25.0, 6.0)

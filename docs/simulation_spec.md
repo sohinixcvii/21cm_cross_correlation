@@ -91,7 +91,7 @@ Everything below the survey block is derived, not chosen. Line numbers are
 | `SURVEY_Z_CENTRAL` | 110 | **7.0** | |
 | `photoz_uncertainty` σ_z | 120 | **0.45** | **Absolute**, not σ_z/(1+z). Equals σ_z/(1+z) = 0.056 at z = 7, against Euclid's < 0.05 requirement |
 | `PHOTOZ_N_SIGMA` | 127 | **1** | Explicit choice: the box spans ±1 σ_z. `= 2` gives Δz = 1.80, z = 6.10–7.90, L∥ = 634.9 Mpc **[C]** |
-| `SURVEY_DELTA_Z` | 128 | **0.90** | `2 × PHOTOZ_N_SIGMA × σ_z` |
+| `SURVEY_DELTA_Z` | 128 | **0.512** | `2 × PHOTOZ_N_SIGMA × σ_z` |
 | `target_cell_size_mpc` | 141 | **2.0 Mpc** | Preserves the resolution of the old 256 Mpc / 128³ grid |
 
 `survey_area_to_box_size()` (`src/conversions.py`) turns those into the grid:
@@ -161,7 +161,7 @@ the grid, `USE_INTERPOLATION_TABLES = "hmf-interpolation"` and
 | Group | Parameter | Value |
 |---|---|---|
 | Selection | `M_UV_limit` (faint) / `M_UV_bright` | **−18** / **−22** → SFR ∈ [0.7956, 31.674] M☉ yr⁻¹ |
-| | `mean_galaxy_density` n̄ | 3 × 10⁻³ h³ Mpc⁻³ → P_N,gal = 333.33 Mpc³ |
+| | `mean_galaxy_density` n̄ | **7.48 × 10⁻⁵ Mpc⁻³** (plain Mpc⁻³, *not* h³ Mpc⁻³) → P_N,gal = 13 368.98 Mpc³ — Euclid Collab.: Allen et al. (2026), A&A 711, A25, Table 2; see `HPC.md` §11.10 |
 | | `GALAXY_WEIGHTING` | `lightcone_sfr` (alternatives: `number`, `luminosity`) |
 | | `galaxy_bias` | 8 — **fallback only**; the catalogue estimator overwrites it (4.744 at 256 Mpc **[M]**) |
 | Cosmology | Ω_m, H₀, Ω_b | 0.315, 67.36, 0.049 (Planck 2018; distances use astropy `Planck18`) |

@@ -92,10 +92,84 @@ def Luv_to_Muv(Luv):
     """
     return 51.60 - 2.5 * np.log10(Luv)
 
-# Madau & Dickinson (2014) UV–SFR conversion factor
-# SFR [M_sun yr^-1] = kappa_UV * L_UV [erg s^-1 Hz^-1]
-# Chabrier (2003) IMF, rest-frame ~1500 Å
-_KAPPA_UV_MADAU14 = 1.15e-28
+# UV-SFR conversion factor:  SFR [M_sun yr^-1] = kappa_UV * L_UV [erg/s/Hz]
+#
+# ADOPTED: Fisher et al. (2026), MNRAS in press, arXiv:2511.10741, Eq. 12 --
+# "REBELS-IFU: Steeply rising star formation histories and the importance of
+# dust obscuration in massive z=7 galaxies revealed by multi-wavelength
+# observations" (Jodrell Bank Centre for Astrophysics).
+#
+#     kappa_UV = (2.7 +/- 0.9) x 10^-29  M_sun/yr / (erg/s/Hz)
+#
+# Derived from JWST NIRSpec-fit *non-parametric* star formation histories of
+# 12 massive (log(M*/M_sun) = 9-10) Lyman-break galaxies at z = 6.5-7.7 from
+# the REBELS-IFU sample, whose SFHs rise steeply rather than being constant.
+#
+# ---------------------------------------------------------------------------
+# CAVEAT 1 -- DEFINITIONAL, and the most important.  This kappa_UV is
+# calibrated specifically to recover SFR_100Myr -- the SFR averaged over the
+# prior 100 Myr -- from a population with RISING SFHs.  It is NOT an
+# instantaneous / constant-SFH calibration.  Any downstream code that assumes
+# a constant or instantaneous SFR interpretation now means something DIFFERENT
+# by "SFR", not merely a different number.  This is a correctness question,
+# not a rescaling.  Two places in this pipeline are affected:
+#   * analysis.euclid_sfr_window() / select_euclid_halos() convert the Euclid
+#     M_UV window into an SFR window and select halos on 21cmFAST's `halo_sfr`.
+#     That SFR is M_star / t_sf with t_sf = t_STAR * t_H(z) = 570.3 Myr at
+#     z = 7 (Park et al. 2019, Eq. 3) -- a 5.7x LONGER averaging window than
+#     the 100 Myr this kappa_UV recovers, under a constant-SFH-like
+#     prescription rather than a rising one.  Which halos count as
+#     "Euclid-detected" therefore changes meaning, and b_g / n_bar / the
+#     galaxy field follow.
+#   * docs/halo_catalogue_reference.md states the pipeline's L_UV-SFR relation
+#     assumes "Continuous star formation".  This value contradicts that
+#     documented assumption directly.
+# NOT resolved here -- flagged for human review.
+#
+# CAVEAT 2 -- UNCERTAINTY.  +/- 0.9 on 2.7 is a ~33% systematic uncertainty,
+# substantially larger than a typical calibration constant.  Any forecast
+# quoting a number derived through this factor should carry that spread, not
+# the central value alone.
+#
+# CAVEAT 2b -- IMF, UNVERIFIED.  Fisher et al.'s Table 2 fiducial
+# (constant-SFH) value uses Chabrier (2003), and the Eq. 12 rising-SFH value
+# comes from the same BAGPIPES SED-fitting setup, so it is almost certainly
+# also Chabrier -- but that was NOT verified.  It should be checked against
+# the IMF assumed by the Park et al. (2019) SFE model used elsewhere in this
+# pipeline (F_STAR10, ALPHA_STAR, t_STAR).  **This codebase does not record
+# Park et al. (2019)'s IMF anywhere**, so consistency can be neither confirmed
+# nor denied from the repository alone.  NOT resolved here.
+#
+# CAVEAT 3 -- POPULATION SPECIFICITY.  Calibrated on massive
+# (log(M*/M_sun) = 9-10), rest-UV-bright REBELS galaxies.  Fisher et al.
+# Sect. 6.4 note that "conversion factors applicable to the more abundant
+# lower-mass galaxies at z~7... may not be quite as low."  If this pipeline's
+# simulated population spans a broader or fainter mass range than the
+# REBELS-IFU calibration sample, applying this value is an EXTRAPOLATION, not
+# a like-for-like match.  NOT resolved here.
+# ---------------------------------------------------------------------------
+#
+# Candidates considered and NOT adopted, recorded so the choice is visible:
+#   * 7.2e-29  -- Chabrier (2003) IMF, constant SFH (Fisher et al. Table 2
+#                 fiducial).
+#   * 1.15e-28 -- the previous value: raw Salpeter IMF, constant SFH, Madau &
+#                 Dickinson (2014), ARA&A 52, 415, rest-frame ~1500 A.
+#                 Dhandha et al. (2026), MNRAS in press, arXiv:2508.13761,
+#                 Eq. 18 independently confirms this 1.15e-28 -- that
+#                 corroboration stands, but now corroborates a SUPERSEDED
+#                 value.
+#
+# NOTE -- unresolved IMF labelling discrepancy.  This repository labelled
+# 1.15e-28 as "Chabrier (2003)" in several places, while
+# docs/halo_catalogue_reference.md calls the same relation "Salpeter-like" and
+# Fisher et al. treat 1.15e-28 as the raw Salpeter value with 7.2e-29 as the
+# Chabrier equivalent.  The repo labelling was therefore inconsistent and
+# probably wrong.  Recorded, not silently corrected.  See
+# NUMBERS_AND_SOURCES.md section 2.
+#
+# The name `_KAPPA_UV_MADAU14` is kept for now so no call site breaks; it is
+# no longer accurate and is a rename candidate.
+_KAPPA_UV_MADAU14 = 2.7e-29
 
 # Critical density of the Universe today, in units of  M_sun Mpc^-3 h^-2.
 #   rho_crit,0 = 3 H_0^2 / (8 pi G)  with  H_0 = 100 h km/s/Mpc
@@ -118,8 +192,11 @@ def Luv_to_sfr(Luv, kappa_uv=_KAPPA_UV_MADAU14):
 
             M_sun yr^-1 / (erg s^-1 Hz^-1)
 
-        Default is 1.15e-28 from Madau & Dickinson (2014) for a
-        Chabrier (2003) IMF.
+        Default is 2.7e-29 from Fisher et al. (2026), arXiv:2511.10741,
+        Eq. 12 -- a rising-SFH calibration recovering SFR_100Myr, with a
+        ~33% systematic uncertainty (+/- 0.9).  See the module-level
+        definition for three caveats that affect correctness, not just
+        magnitude.
 
     Returns
     -------
@@ -163,8 +240,11 @@ def sfr_to_Luv(sfr, kappa_uv=_KAPPA_UV_MADAU14):
 
             M_sun yr^-1 / (erg s^-1 Hz^-1)
 
-        Default is 1.15e-28 from Madau & Dickinson (2014) for a
-        Chabrier (2003) IMF.
+        Default is 2.7e-29 from Fisher et al. (2026), arXiv:2511.10741,
+        Eq. 12 -- a rising-SFH calibration recovering SFR_100Myr, with a
+        ~33% systematic uncertainty (+/- 0.9).  See the module-level
+        definition for three caveats that affect correctness, not just
+        magnitude.
 
     Returns
     -------
@@ -330,7 +410,8 @@ def sfr_to_Muv(sfr, kappa_uv=_KAPPA_UV_MADAU14):
 
             M_sun yr^-1 / (erg s^-1 Hz^-1)
 
-        Default is 1.15e-28 from Madau & Dickinson (2014).
+        Default is 2.7e-29 from Fisher et al. (2026), arXiv:2511.10741,
+        Eq. 12.  See the module-level definition for its caveats.
 
     Returns
     -------
@@ -355,6 +436,96 @@ def sfr_to_Muv(sfr, kappa_uv=_KAPPA_UV_MADAU14):
     -18.25
     """
     return Luv_to_Muv(sfr_to_Luv(sfr, kappa_uv=kappa_uv))
+
+
+def mab_to_Muv(mab, z, cosmo: Optional[Any] = None):
+    """
+    Convert an apparent AB magnitude to an absolute UV AB magnitude.
+
+    ``M_UV = m_AB - DM(z) + 2.5 log10(1 + z)``, where
+    ``DM(z) = 5 log10(D_L / 10 pc)`` is the standard distance modulus and the
+    ``+2.5 log10(1 + z)`` term is the usual bandwidth-compression correction
+    that takes the observed band to the rest-frame band.
+
+    Parameters
+    ----------
+    mab : float or ndarray
+        Apparent magnitude in the AB system.
+    z : float
+        Redshift of the source.
+    cosmo : astropy.cosmology.FLRW, optional
+        Cosmology for the luminosity distance.  Defaults to ``Planck18``,
+        matching the ``cosmo=None`` convention used elsewhere in this module.
+
+    Returns
+    -------
+    Muv : float or ndarray
+        Absolute UV magnitude in the AB magnitude system.
+
+    Notes
+    -----
+    Matches Euclid Collaboration: Allen et al. (2026), A&A 711, A25, Eq. 15.
+    Their additional ``Delta M_loss`` term is deliberately omitted: it
+    corrects for Lyman-alpha forest absorption entering the H_E band, which
+    only applies at z > 10 and so is irrelevant at this pipeline's z ~ 7.
+
+    The conversion is only weakly cosmology-dependent — Planck18 and the
+    Allen et al. cosmology (Omega_m = 0.27, H_0 = 70) differ by 0.033 mag at
+    z = 7.
+
+    References
+    ----------
+    Euclid Collaboration: Allen et al. (2026), A&A 711, A25, Eq. 15
+    Oke & Gunn (1983)
+
+    Examples
+    --------
+    >>> round(float(mab_to_Muv(25.0, 7.0)), 2)
+    -21.98
+    """
+    cosmology = Planck18 if cosmo is None else cosmo
+    distance_modulus = 5.0 * np.log10(
+        cosmology.luminosity_distance(z).to(u.pc).value / 10.0
+    )
+    return mab - distance_modulus + 2.5 * np.log10(1.0 + z)
+
+
+def Muv_to_mab(Muv, z, cosmo: Optional[Any] = None):
+    """
+    Convert an absolute UV AB magnitude to an apparent AB magnitude.
+
+    Exact inverse of :func:`mab_to_Muv`:
+    ``m_AB = M_UV + DM(z) - 2.5 log10(1 + z)``.
+
+    Parameters
+    ----------
+    Muv : float or ndarray
+        Absolute UV magnitude in the AB magnitude system.
+    z : float
+        Redshift of the source.
+    cosmo : astropy.cosmology.FLRW, optional
+        Cosmology for the luminosity distance.  Defaults to ``Planck18``.
+
+    Returns
+    -------
+    mab : float or ndarray
+        Apparent magnitude in the AB system.
+
+    See Also
+    --------
+    mab_to_Muv : The forward conversion, with the full derivation and
+        references.
+
+    Examples
+    --------
+    >>> round(float(Muv_to_mab(-21.983, 7.0)), 2)
+    25.0
+    """
+    cosmology = Planck18 if cosmo is None else cosmo
+    distance_modulus = 5.0 * np.log10(
+        cosmology.luminosity_distance(z).to(u.pc).value / 10.0
+    )
+    return Muv + distance_modulus - 2.5 * np.log10(1.0 + z)
 
 
 def survey_area_from_volume(
@@ -719,15 +890,18 @@ def survey_area_to_box_size(
       real field is not, so ``L_perp`` is an equivalent-square side.
     - *Central redshift.*  z = 7.
     - *Redshift depth.*  Set by the photometric redshift uncertainty,
-      sigma_z = 0.45 **absolute** at z = 7.  This comes from Euclid's
-      fractional photo-z requirement sigma_z/(1+z) < 0.05, which at z = 7
-      gives sigma_z ~ 0.45; it is the same absolute sigma_z that
-      ``src/analysis.py:radial_smearing_length`` consumes.  The multiple of
+      sigma_z = 0.256 **absolute** at z = 7.  This comes from Euclid
+      Collaboration: Allen et al. (2026), A&A 711, A25, Sect. 3 / Fig. 4,
+      ``sigma_nmad <= 0.032``, converted on the standard NMAD normalisation
+      as ``0.032 * (1 + z)``; it is the same absolute sigma_z that
+      ``src/analysis.py:radial_smearing_length`` consumes.  Two caveats on
+      that value -- a field mismatch and a normalisation ambiguity -- are
+      recorded in ``NUMBERS_AND_SOURCES.md`` section 5.  The multiple of
       sigma_z is a **deliberate choice, not a default of this function** —
       the caller passes ``delta_z`` explicitly.  The forecast adopts
-      +/-1 sigma, ``delta_z = 2 * 0.45 = 0.90`` (z = 6.55 - 7.45,
-      L_los = 315.6 Mpc); +/-2 sigma would give ``delta_z = 1.80``
-      (z = 6.10 - 7.90, L_los = 634.9 Mpc).
+      +/-1 sigma, ``delta_z = 2 * 0.256 = 0.512`` (z = 6.744 - 7.256,
+      L_los = 179.3 Mpc); +/-2 sigma would give ``delta_z = 1.024``
+      (z = 6.488 - 7.512, L_los = 359.3 Mpc).
     - *Cosmology.*  Planck18 via astropy, consistent with the comoving
       distances used elsewhere for lightcone geometry.  Note the analysis
       functions in ``src/analysis.py`` take literal H_0 = 67.36,

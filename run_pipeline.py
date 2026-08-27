@@ -397,9 +397,11 @@ def observational_stage(
         Computed power spectra.
     photoz_uncertainty : float, optional
         Absolute σ_z override.  Defaults to the ``photoz_uncertainty``
-        attribute, or 0.45 — the Euclid requirement σ_z/(1+z) < 0.05 at
-        z = 7.  This is **not** the fractional value; see
-        :func:`src.analysis.radial_smearing_length`.
+        attribute, or 0.256 — Euclid Collaboration: Allen et al. (2026),
+        A&A 711, A25, Sect. 3 / Fig. 4, ``σ_nmad ≤ 0.032`` converted as
+        ``0.032 × (1 + z)`` at z = 7.  This is **not** the fractional value;
+        see :func:`src.analysis.radial_smearing_length`.  Two caveats on the
+        source value are recorded in ``NUMBERS_AND_SOURCES.md`` §5.
     wedge_buffer : float, optional
         Wedge margin override [Mpc^-1].  Defaults to the ``wedge_buffer``
         attribute, or 0.0677 = 0.1 h Mpc^-1 (Pober et al. 2014 "moderate").
@@ -435,14 +437,14 @@ def observational_stage(
         spectra=spectra,
         z_obs=data.z_obs if z_obs is None else float(z_obs),
         photoz_uncertainty=resolve(
-            photoz_uncertainty, "photoz_uncertainty", 0.45
+            photoz_uncertainty, "photoz_uncertainty", 0.256
         ),
         wedge_buffer=resolve(wedge_buffer, "wedge_buffer", 0.0677),
         integration_time=resolve(
             integration_time, "integration_time", 1000 * 3600
         ),
         bandwidth=resolve(bandwidth, "bandwidth", 8e6),
-        mean_galaxy_density=data.get("mean_galaxy_density", 3e-3),
+        mean_galaxy_density=data.get("mean_galaxy_density", 7.48e-5),
         dish_diameter=data.get("HERA_DISH_DIAMETER", 14.0),
         f_21_hz=data.get("F_21_HZ", 1420.405e6),
         speed_of_light_mps=data.get("SPEED_OF_LIGHT_MPS", 3e8),
@@ -1138,7 +1140,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     budget_group.add_argument(
         "--sigma-z", type=float, default=None, metavar="SIGMA_Z",
         help="absolute photo-z uncertainty sigma_z, NOT sigma_z/(1+z) "
-             "(stored default: 0.45, the Euclid requirement at z = 7)",
+             "(stored default: 0.256 = 0.032 x (1+z), Euclid Collab.: Allen "
+             "et al. 2026, A&A 711, A25 Sect. 3 / Fig. 4)",
     )
     budget_group.add_argument(
         "--wedge-buffer", type=float, default=None, metavar="MPC-1",

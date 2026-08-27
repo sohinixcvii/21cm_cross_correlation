@@ -156,19 +156,66 @@ SMOKE_TEST = bool(_ARGS.smoke_test)
 SURVEY_AREA_DEG2 = 10.0     # Euclid Deep Field Fornax footprint  [deg^2]
 SURVEY_Z_CENTRAL = 7.0      # central redshift of the analysis
 
-# sigma_z is the *absolute* photometric redshift error, not sigma_z/(1+z):
-# radial_smearing_length() computes sigma_r = c sigma_z / H(z) directly.
-# 0.45 at z_obs = 7 corresponds to sigma_z/(1+z) = 0.056, consistent with the
-# Euclid photometric requirement sigma_z/(1+z) < 0.05. The previous value of
-# 0.059 was the fractional quantity used as if it were absolute, which
-# understated sigma_r by a factor ~7.6.
-# Defined here, not in the Euclid block below, because it now also sets the
-# line-of-sight depth of the box.
-photoz_uncertainty = 0.45   # sigma_z photometric redshift error (absolute)
+# sigma_z is the *absolute* photometric redshift error, NOT sigma_z/(1+z):
+# radial_smearing_length() computes sigma_r = c sigma_z / H(z) directly, and
+# its docstring states the convention explicitly.  Surveys quote the
+# fractional form, so it must be multiplied by (1+z) before it lands here.
+#
+# Source: Euclid Collaboration: Allen et al. (2026), A&A 711, A25, Sect. 3 and
+# Fig. 4 -- sigma_nmad <= 0.032, the measured scatter between true and
+# photometric redshift in their synthetic Euclid Deep Field catalogue test.
+# This replaces the previous 0.45, which came from Euclid's *pre-launch*
+# fractional requirement sigma_z/(1+z) < 0.05 -- a specification, not a
+# measurement.  Converting on the standard NMAD convention:
+#     sigma_z(z=7) = 0.032 * (1 + 7) = 0.256
+#
+# CAVEAT 1 -- field mismatch, deliberately NOT resolved.  Allen et al. give
+# 0.032 as an upper bound across all three Euclid Deep Fields (EDF-N/S/F),
+# and explicitly call out EDF-North as having the largest (worst) scatter.
+# This pipeline's geometry is EDF-*Fornax* specifically, whose true value is
+# likely smaller (better) than 0.032.  That field-specific number is not
+# available as printed text in the paper -- it appears only as an annotation
+# inside the Fig. 4 image, which was not extractable.  We therefore adopt the
+# conservative worst-field bound, not the field-specific value.
+#
+# CAVEAT 2 -- normalisation ambiguity, deliberately NOT resolved.  The paper's
+# caption text describes sigma_nmad as the scatter in "z_true - z_phot"
+# without explicitly stating the (1+z) normalisation in the visible text, even
+# though that normalisation is standard for any metric named "sigma_NMAD" in
+# the photo-z literature.  The * (1+z) conversion above ASSUMES the standard
+# normalised definition.  If a later full reading of Fig. 4 or Sect. 3
+# contradicts this, the sigma_z = 0.256 conversion must be revisited.
+#
+# Alternative sources, recorded but NOT adopted -- see NUMBERS_AND_SOURCES.md
+# section 5.  Neither yielded an extractable sigma_NMAD from its accessible
+# text, so neither can supersede Allen et al. without a manual read:
+#   - Varadaraj et al. (2026), A&A 707, A239 (arXiv:2510.00945), "Euclid:
+#     Discovery of bright z ~= 7 Lyman-break galaxies in UltraVISTA and Euclid
+#     COSMOS".  Selection 6.5 <= z <= 7.5 -- a much tighter match to this
+#     pipeline's z_obs = 7 than Allen's 6 <= z < 8 bin, and the same LBG
+#     population.  But it is the COSMOS field, not an EDF, so it trades one
+#     field mismatch for another.  Mean photo-z uncertainties are in its
+#     Fig. 4.
+#   - Weaver et al. (2025), A&A 697, A16 (arXiv:2405.13505), "Euclid: Early
+#     Release Observations -- NISP-only sources and the search for luminous
+#     z = 6-8 galaxies".  Redshift range matches Allen's bin, but the fields
+#     are the 1.5 deg^2 ERO 'Magnifying Lens' Abell cluster fields, and the
+#     selection is NISP-only sources with no appreciable VIS flux -- a
+#     specific, atypical population rather than a general EDF sample.
+#
+# Defined here, not in the Euclid block below, because it also sets the
+# line-of-sight depth of the box via SURVEY_DELTA_Z.
+photoz_uncertainty = 0.256  # sigma_z photometric redshift error (absolute)
 
 # CHOICE, not a default: how many sigma_z of photo-z scatter the box spans.
-# PHOTOZ_N_SIGMA = 1 -> delta_z = 0.90, z = 6.55-7.45, L_los = 315.6 Mpc
-# PHOTOZ_N_SIGMA = 2 -> delta_z = 1.80, z = 6.10-7.90, L_los = 634.9 Mpc
+# PHOTOZ_N_SIGMA = 1 -> delta_z = 0.512, z = 6.744-7.256, L_los = 179.3 Mpc
+# PHOTOZ_N_SIGMA = 2 -> delta_z = 1.024, z = 6.488-7.512, L_los = 359.3 Mpc
+#
+# NOTE: because SURVEY_DELTA_Z is proportional to sigma_z and sigma_r is too,
+# L_los / sigma_r == 2 * PHOTOZ_N_SIGMA *exactly*, whatever sigma_z is.  The
+# photo-z kernel at the box's own fundamental mode is therefore pinned at
+# W = exp(-pi^2 / 2) = 0.0072 and does NOT improve when sigma_z improves --
+# only this choice moves it.  See NUMBERS_AND_SOURCES.md section 5.
 # The forecast adopts +/-1 sigma; raising this widens the LOS extent but
 # pushes further from the quasi-coeval regime the estimator assumes.
 PHOTOZ_N_SIGMA = 1
@@ -210,12 +257,12 @@ DIM     = SIM_BOX.dim        # 768, high-res grid for initial conditions
 # DO NOT widen this range without doing TODO.md P0.1 and P0.2 first.
 #
 # The survey footprint implies a much wider range -- SIM_BOX.z_min/z_max =
-# 6.55/7.45 (delta_z = 0.90, L_LOS = 315.6 Mpc) from the photo-z depth above.
+# 6.744/7.256 (delta_z = 0.512, L_LOS = 179.3 Mpc) from the photo-z depth above.
 # That is the range this forecast *should* run once TODO.md P0 lands; the
 # transverse box size is already sized for it. Until then the slab below
 # deliberately overrides it, so only BOX_LEN/HII_DIM/DIM are footprint-driven.
-SURVEY_Z_MIN = SIM_BOX.z_min   # 6.55 — survey-derived, not used yet
-SURVEY_Z_MAX = SIM_BOX.z_max   # 7.45 — survey-derived, not used yet
+SURVEY_Z_MIN = SIM_BOX.z_min   # 6.744 — survey-derived, not used yet
+SURVEY_Z_MAX = SIM_BOX.z_max   # 7.256 — survey-derived, not used yet
 
 z_min = 6.995          # nearest redshift (low-z end of lightcone)
 z_max = 7.005          # farthest redshift (high-z end)
@@ -229,9 +276,32 @@ M_UV_limit          = -18    # UV absolute magnitude cut
 # estimate (section 4) select on it.
 M_UV_bright         = -22
 M_UV_faint          = M_UV_limit
-# photoz_uncertainty (sigma_z = 0.45, absolute) is set in the survey-footprint
+# photoz_uncertainty (sigma_z = 0.256, absolute) is set in the survey-footprint
 # block above, because it now also sets the line-of-sight depth of the box.
-mean_galaxy_density = 3e-3   # n_bar  [h^3 Mpc^-3]
+# n_bar for the galaxy shot noise P_N,gal = 1/n_bar.
+#
+# Units: plain Mpc^-3, NOT h^3 Mpc^-3.  Every consumer -- the shot-noise term
+# in src.analysis.compute_uncertainty_budget and the expected_counts draw in
+# section 3b below -- uses it against volumes already in Mpc^3, and no factor
+# of h^3 is applied anywhere.  The previous value carried an "[h^3 Mpc^-3]"
+# label that nothing in the code acted on.
+#
+# Source: Euclid Collaboration: Allen et al. (2026), A&A 711, A25, "Euclid
+# Quick Data Release (Q1) XXV. Hunting for luminous z>6 galaxies in the Euclid
+# Deep Fields".  Table 2 (p. 9), row 6 <= z < 8, column Selected(DPL):
+# N = 70,445 +/- 265 galaxies over the full 53 deg^2 survey to 26.5 AB depth.
+# Divided by the comoving volume of that 53 deg^2, 6 < z < 8 shell,
+# V = 3.2285e8 (h^-1 Mpc)^3:
+#     n_bar = N / V = 2.18e-4 h^3 Mpc^-3 = 7.48e-5 Mpc^-3   (h = 0.7)
+#
+# CAVEAT -- cosmology mismatch, deliberately NOT reconciled.  That volume was
+# computed with the *paper's own* cosmology (Allen et al., end of Sect. 1:
+# Omega_m = 0.27, Omega_Lambda = 0.73, H0 = 70 km/s/Mpc), which is NOT the
+# Planck18 cosmology this pipeline adopts elsewhere (Omega_m = 0.3111,
+# H0 = 67.66).  Recomputing V under Planck18 would change n_bar, but that is a
+# decision for the paper's authors, not an automatic fix -- do not silently
+# reconcile the two.  See NUMBERS_AND_SOURCES.md section 2.
+mean_galaxy_density = 7.48e-5   # n_bar  [Mpc^-3]  (see the block above)
 
 # ---------------------------------------------------------------------------
 #  How the galaxy overdensity field is weighted
@@ -245,7 +315,9 @@ mean_galaxy_density = 3e-3   # n_bar  [h^3 Mpc^-3]
 #
 # "luminosity" — delta_gal,L = sum(L_UV) / <sum(L_UV)> - 1 from the same
 #     selected catalogue, weighting each halo by its own UV luminosity
-#     (L_UV = SFR / kappa_UV, Madau & Dickinson 2014).
+#     (L_UV = SFR / kappa_UV, Fisher et al. 2026, arXiv:2511.10741 Eq. 12;
+#     the constant cancels out of an overdensity, so this mode is
+#     insensitive to its value).
 #
 # The two catalogue modes are interchangeable: identical grid, identical
 # normalisation, identical downstream handling.  They are built from the
@@ -856,7 +928,7 @@ if HAS_21CMFAST and GALAXY_WEIGHTING in GALAXY_WEIGHTING_MODES:
     print(f"  Grid          : {galaxy_overdensity.shape}, "
           f"LOS extent {BOX_LEN:.1f} Mpc (coeval box, not L_los)")
     print(f"  Galaxy δ      : [{galaxy_overdensity.min():.2f}, {galaxy_overdensity.max():.2f}]")
-    print(f"  Shot-noise n̄  : {mean_galaxy_density:.2e} h³ Mpc⁻³  (survey parameter)")
+    print(f"  Shot-noise n̄  : {mean_galaxy_density:.2e} Mpc⁻³  (survey parameter)")
 
     if galaxy_selection.n_selected == 0:
         print("  WARNING: no halo passed the magnitude cut — δ_gal is identically zero.")
@@ -893,7 +965,7 @@ elif HAS_21CMFAST:
 
     print(f"  SFR density  : [{sfr_field.min():.2e}, {sfr_field.max():.2e}] (internal units)")
     print(f"  Galaxy δ     : [{galaxy_overdensity.min():.2f}, {galaxy_overdensity.max():.2f}]")
-    print(f"  Shot-noise n̄ : {mean_galaxy_density:.2e} h³ Mpc⁻³  (survey parameter)")
+    print(f"  Shot-noise n̄ : {mean_galaxy_density:.2e} Mpc⁻³  (survey parameter)")
 
 else:
     print("\nGenerating synthetic galaxy field …")

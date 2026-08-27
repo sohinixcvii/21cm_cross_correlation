@@ -82,7 +82,8 @@ $$\sigma_r = \frac{c\,\sigma_z}{H(z_\mathrm{obs})}$$
 
 | $\sigma_z$ | $\sigma_r$ | Provenance |
 |---|---|---|
-| 0.45 | **157.48 Mpc** | current default — Euclid's $\sigma_z/(1+z) < 0.05$ at $z = 7$ |
+| 0.45 | 157.48 Mpc | superseded — Euclid's *pre-launch requirement* $\sigma_z/(1+z) < 0.05$ at $z = 7$ |
+| **0.256** | **89.59 Mpc** | **current default** — Euclid Collab.: Allen et al. (2026), A&A 711, A25, Sect. 3 / Fig. 4, measured $\sigma_{\rm nmad} \le 0.032$ converted as $0.032\times(1+z)$; see `NUMBERS_AND_SOURCES.md` §5 for two open caveats |
 | 0.059 | 20.65 Mpc | the notebook's **former** value, since corrected (see §4.2) |
 
 > **$\sigma_z$ here is absolute, not $\sigma_z/(1+z)$.** Surveys quote the
@@ -159,8 +160,9 @@ in for the per-mode survey volume that a full model
 inlined and unnamed in the notebook; naming it makes the approximation visible
 rather than accidental. See §7.2.
 
-**Galaxy shot noise:** $P_{N,\mathrm{gal}} = 1/\bar n = 1/(3\times10^{-3}) =
-\mathbf{333.33\ Mpc^3}$.
+**Galaxy shot noise:** $P_{N,\mathrm{gal}} = 1/\bar n = 1/(7.48\times10^{-5}) =
+\mathbf{13\,368.98\ Mpc^3}$ (was 333.33 under the superseded
+$\bar n = 3\times10^{-3}$; see §7.4).
 
 ### 2.4 Variance — La Plante et al. (2023), Eqs. 15–17 (step ④)
 
@@ -365,7 +367,7 @@ None of them affects the simulated fields, so all can be swept without
 | Wedge buffer | `--wedge-buffer` | `wedge_buffer` | 0.0677 | Mpc⁻¹ |
 | Integration time | `--integration-time` | `integration_time` | 3.6 × 10⁶ | s |
 | Bandwidth | `--bandwidth` | `bandwidth` | 8 × 10⁶ | Hz |
-| Mean galaxy density | — | `mean_galaxy_density` | 3 × 10⁻³ | see §7.4 |
+| Mean galaxy density | — | `mean_galaxy_density` | 7.48 × 10⁻⁵ | Mpc⁻³; see §7.4 |
 | Dish diameter | — | `HERA_DISH_DIAMETER` | 14.0 | m |
 | 21 cm rest frequency | — | `F_21_HZ` | 1420.405 × 10⁶ | Hz |
 | $H_0$, $\Omega_{m,0}$ | — | `HUBBLE_CONSTANT`, `OMEGA_M_0` | 67.36, 0.315 | |
@@ -578,12 +580,27 @@ on the fiducial grid), and the missing $\sqrt{dN}$ runs from 2.0 to 64.1 with
 a median of 8.2 over the usable bins — roughly an order of magnitude in the
 total. Tracked in `HPC.md` §11.4.
 
-### 7.4 `mean_galaxy_density` has an unresolved unit
+### 7.4 `mean_galaxy_density` — unit resolved, value now sourced
 
-Declared `h³ Mpc⁻³` at `run_simulation.py:126` but consumed as
-$P_{N,\mathrm{gal}} = 1/\bar n$ and reported in Mpc³. If the declared $h^3$ is
-meant literally, the shot noise is low by $h^{-3} = 3.3\times$. Carried over
-from the notebook unchanged; recorded in `HPC.md` §13.2.
+**Resolved 2026-08-27.** The parameter was declared `h³ Mpc⁻³` but consumed as
+$P_{N,\mathrm{gal}} = 1/\bar n$ and reported in Mpc³, leaving open whether the
+shot noise was low by $h^{-3} = 3.3\times$. A grep of every consumer settles
+it: **no factor of $h^3$ is applied anywhere in the codebase.**
+`compute_uncertainty_budget` forms $1/\bar n$ alongside `P_galaxy_auto` in
+mK² Mpc³, and `run_simulation.py` §3b forms $\bar n \times$ `cell_volume` with
+`cell_volume` in Mpc³. The parameter is **plain Mpc⁻³** and the old label was
+inert.
+
+The value is no longer the notebook's unsourced placeholder either. It now
+derives from **Euclid Collaboration: Allen et al. (2026), A&A 711, A25**,
+Table 2 (p. 9), row $6 \le z < 8$, column `Selected(DPL)`:
+$\bar n = N/V = 70\,445 / 3.2285\times10^{8}\ (h^{-1}\,$Mpc$)^3
+= 2.18\times10^{-4}\ h^3\,$Mpc$^{-3} = \mathbf{7.48\times10^{-5}}\ $Mpc$^{-3}$
+at $h = 0.7$ — a factor 40.1 below the old 3 × 10⁻³, part genuine and part the
+inert-label correction. $V$ uses the **source paper's own cosmology**
+($\Omega_m = 0.27$, $H_0 = 70$), not this pipeline's Planck18; that mismatch
+is deliberately left unreconciled. Full detail in `HPC.md` §11.10 and
+`NUMBERS_AND_SOURCES.md` §2.
 
 ### 7.5 A single reference redshift
 

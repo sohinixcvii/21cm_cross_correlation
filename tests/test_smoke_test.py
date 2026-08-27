@@ -343,7 +343,7 @@ class TestSmokeTestCli:
         assert "SURVEY_AREA_DEG2 = 10.0" in config
         assert "target_cell_size_mpc=2.0" in config
         assert "integration_time   = 1000 * 3600" in config
-        assert "photoz_uncertainty = 0.45" in config
+        assert "photoz_uncertainty = 0.256" in config
         assert "wedge_buffer = 0.0677" in config
         assert "n_bins_perp     = 20" in config
         assert "n_bins_parallel = 20" in config

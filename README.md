@@ -170,12 +170,12 @@ changing any of them needs `--sim force` to take effect:
 |----------|---------|---------|
 | `SURVEY_AREA_DEG2` | `10.0` | Euclid Deep Field Fornax footprint [deg²] |
 | `SURVEY_Z_CENTRAL` | `7.0` | central redshift of the analysis |
-| `photoz_uncertainty` | `0.45` | absolute $\sigma_z$; also sets the LOS depth of the box |
-| `PHOTOZ_N_SIGMA` | `1` | how many $\sigma_z$ the box spans — 1 → $\Delta z = 0.90$, 2 → $1.80$ |
+| `photoz_uncertainty` | `0.256` | absolute $\sigma_z$; also sets the LOS depth of the box — Euclid Collab.: Allen et al. (2026), A&A 711, A25, Sect. 3 / Fig. 4, $0.032\times(1+z)$; two caveats in `NUMBERS_AND_SOURCES.md` §5 |
+| `PHOTOZ_N_SIGMA` | `1` | how many $\sigma_z$ the box spans — 1 → $\Delta z = 0.512$, 2 → $1.024$ |
 | `z_min`, `z_max` | `6.995`, `7.005` | lightcone range — the deliberate smoke-test slab (see below) |
 | `minimum_los_slices` | `100` | floor on $N_z$, overriding the cell-size-matched value |
 | `M_UV_limit` / `M_UV_bright` | `-18` / `-22` | Euclid magnitude window |
-| `mean_galaxy_density` | `3e-3` | $\bar n_\mathrm{gal}$ [$h^3$ Mpc⁻³] |
+| `mean_galaxy_density` | `7.48e-5` | $\bar n_\mathrm{gal}$ [Mpc⁻³, **not** $h^3$ Mpc⁻³] — Euclid Collab.: Allen et al. (2026), A&A 711, A25, Table 2; see `NUMBERS_AND_SOURCES.md` §2 for the $N/V$ derivation and the cosmology caveat |
 | `GALAXY_WEIGHTING` | `"lightcone_sfr"` | `lightcone_sfr` \| `number` \| `luminosity` — how $\delta_\mathrm{gal}$ is built |
 | `ESTIMATOR` | `"coeval"` | `coeval` \| `lightcone` — which power-spectrum formalism the run is built for (see below) |
 | `LIGHTCONE_SAMPLING` | derived → `"redshift"` | `redshift` \| `comoving`; `comoving` is `TODO.md` P0.1 |

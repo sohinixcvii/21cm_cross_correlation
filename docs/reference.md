@@ -262,8 +262,8 @@ A refactored version of notebook 3 split into three independent parts for cluste
 | $z_\mathrm{obs}$ | 7.0 | Reference redshift (midpoint) |
 | `minimum_los_slices` | 100 | Floor on $N_z$, overriding the cell-size-matched value |
 | $M_\mathrm{UV}$ limit | $< -18$ | Euclid galaxy selection (bright end $-22$) |
-| $\sigma_z$ | **0.45** | Euclid photo-$z$ uncertainty — **absolute**, not $\sigma_z/(1+z)$. Equals $\sigma_z/(1+z) = 0.056$ at $z=7$, consistent with the Euclid requirement $< 0.05$. Was 0.059 (the fractional value used as if absolute), which understated $\sigma_r$ by $\sim 7.6\times$ |
-| $\bar{n}_\mathrm{gal}$ | $3\times10^{-3}\ h^3\ \mathrm{Mpc}^{-3}$ | Mean galaxy number density |
+| $\sigma_z$ | **0.256** | Euclid photo-$z$ uncertainty — **absolute**, not $\sigma_z/(1+z)$. Euclid Collab.: Allen et al. (2026), A&A 711, A25, Sect. 3 / Fig. 4: measured $\sigma_{\rm nmad} \le 0.032$, converted as $0.032\times(1+z)$. Supersedes 0.45, which was the *pre-launch requirement* $\sigma_z/(1+z) < 0.05$ rather than a measurement. Two caveats — worst-field bound, and the NMAD normalisation assumption — in `NUMBERS_AND_SOURCES.md` §5 |
+| $\bar{n}_\mathrm{gal}$ | $7.48\times10^{-5}\ \mathrm{Mpc}^{-3}$ | Mean galaxy number density — Euclid Collab.: Allen et al. (2026), A&A 711, A25, Table 2, $N/V$. **Plain Mpc⁻³, not $h^3$ Mpc⁻³.** Derived under the paper's own cosmology, not Planck18; see `NUMBERS_AND_SOURCES.md` §2 |
 | $b_\mathrm{gal}$ | 8 | Fallback only; overwritten by the halo-catalogue estimate ($\approx 4.7$) |
 | $t_\star$ | 0.5 | SFR timescale as a fraction of $t_H(z)$ — 570 Myr at $z=7$ |
 | $t_\mathrm{obs}$ | 1000 h | Integration time |
