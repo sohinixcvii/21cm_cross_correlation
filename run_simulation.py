@@ -264,17 +264,21 @@ DIM     = SIM_BOX.dim        # 768, high-res grid for initial conditions
 SURVEY_Z_MIN = SIM_BOX.z_min   # 6.744 — survey-derived, not used yet
 SURVEY_Z_MAX = SIM_BOX.z_max   # 7.256 — survey-derived, not used yet
 
-z_min = 6.995          # nearest redshift (low-z end of lightcone)
-z_max = 7.005          # farthest redshift (high-z end)
+z_center = 7.0
+z_width  = 0.2
+
+z_min = z_center - z_width / 2   # 6.9
+z_max = z_center + z_width / 2   # 7.1
+
 
 # ---------------------------------------------------------------------------
 #  Euclid-like survey parameters
 # ---------------------------------------------------------------------------
-M_UV_limit          = -18    # UV absolute magnitude cut
+M_UV_limit          = -22    # UV absolute magnitude cut
 # Absolute UV magnitude window (more negative = brighter). Defined here
 # because both the galaxy-field construction (section 3b) and the bias
 # estimate (section 4) select on it.
-M_UV_bright         = -22
+M_UV_bright         = -26
 M_UV_faint          = M_UV_limit
 # photoz_uncertainty (sigma_z = 0.256, absolute) is set in the survey-footprint
 # block above, because it now also sets the line-of-sight depth of the box.
@@ -393,7 +397,7 @@ n_bins_parallel = 20
 # The analysis stage reads `estimator` back from the HDF5 and defaults to it,
 # so the two halves cannot silently disagree; `run_pipeline.py --estimator`
 # overrides it for a cached-spectra re-run.
-ESTIMATOR = "coeval"          # coeval | lightcone
+ESTIMATOR = "lightcone"          # coeval | lightcone
 
 if ESTIMATOR not in ("coeval", "lightcone"):
     raise ValueError(f"ESTIMATOR must be 'coeval' or 'lightcone', got {ESTIMATOR!r}")
@@ -523,8 +527,10 @@ lc_redshifts = np.linspace(z_min, z_max, N_z)
 
 # ── Node redshifts for 21cmFAST (coeval snapshots driving the physics) ────────
 # Use ~10 nodes per unit redshift for good accuracy
-n_nodes        = max(int(round(10 * (z_max - z_min))), 5)
-node_redshifts = np.linspace(z_max, z_min, n_nodes)   # high-z → low-z
+z_pad = 0.01
+
+n_nodes        = max(int(round(10 * ((z_max + z_pad) - (z_min - z_pad)))), 5)
+node_redshifts = np.linspace((z_max + z_pad), (z_min - z_pad), n_nodes)   # high-z → low-z
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 print(f"Box         : {BOX_LEN:.1f} Mpc,  {HII_DIM}³ cells  →  cell size = {cell_size:.2f} Mpc")
