@@ -391,6 +391,15 @@ A commonly used conversion is:
 
 L_UV ≈ 1.15 × 10^28 × SFR
 
+> **This page describes the historical relation, which this pipeline no longer
+> uses.** The adopted value is now `kappa_UV = 2.7e-29` (Fisher et al. 2026,
+> arXiv:2511.10741, Eq. 12), i.e. `L_UV ≈ 3.7 × 10^28 × SFR`. Critically, the
+> assumptions listed below — **"Continuous star formation"** and a
+> **"Salpeter-like IMF"** — are exactly what the new value does *not* assume:
+> it is calibrated on **rising** SFHs to recover `SFR_100Myr`, on a Chabrier
+> setup. This conflict is recorded as Caveat 1 in `NUMBERS_AND_SOURCES.md` §2
+> and is **unresolved**, pending human review.
+
 where:
 
 ```text

@@ -7,6 +7,183 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Halo-index overflow fix, 2026-08-27 ─────────────────────────────── -->
+
+### Fixed
+
+- **Production runs segfaulted (exit −11): the halo catalogue overflows a
+  32-bit index.** `SAMPLER_MIN_MASS` **1 × 10⁸ → 2 × 10⁸ M☉**, now set in the
+  `run_simulation.py` config block instead of being inherited silently from
+  the `"simple"` template.
+
+  21cmFAST's C backend indexes halo arrays with `int`. `halo_coords` holds
+  `3 × N_halos` elements, so it overflows once
+  `N_halos > INT_MAX/3 = 7.158 × 10⁸`. At the footprint-derived
+  `BOX_LEN = 486.33` Mpc the template floor draws **9.370 × 10⁸** halos —
+  `3N = 2.811 × 10⁹`, **1.31 × INT_MAX**. Not a memory problem: no node size
+  or thread count fixes it.
+
+  **Narrowing the redshift range does not help**, which is the trap. The
+  catalogue is drawn in the full *cubic* box (`HALOS_PER_MPC3 × BOX_LEN³`;
+  the failing banner shows `1.150e8 Mpc³ = 486.33³`), and the lightcone range
+  only decides how many slices are kept afterwards. z = 6.55–7.45 → 6.89–7.11
+  changed nothing about the draw and failed identically.
+
+  | `SAMPLER_MIN_MASS` | Halo count | Star formation | `int32_headroom` |
+  |---|---|---|---|
+  | 1 × 10⁸ (template) | 100 % | 100 % | **1.31 — segfaults** |
+  | 1.5 × 10⁸ | 63.1 % | 99.95 % | 0.83 |
+  | **2 × 10⁸ (adopted)** | **46.2 %** | **99.84 %** | **0.61** |
+  | 3 × 10⁸ | 28.7 % | 99.44 % | 0.38 |
+
+  **The trade is nearly free** because `M_TURN = 5 × 10⁸` already puts
+  `exp(−M_TURN/M_h)` on the stellar fraction: a 10⁸ M☉ halo forms stars at
+  `exp(−5) = 0.7 %` of its unsuppressed rate. The raise discards just over half
+  the *objects* and **0.16 % of the star formation**, leaving the ionizing
+  budget, the 21 cm field and the Euclid selection (~10¹⁰–10¹¹ M☉) untouched.
+  Shrinking the box instead would need `BOX_LEN ≤ 444.6` Mpc, breaking the
+  10 deg² EDF-Fornax traceability `survey_area_to_box_size()` exists to
+  provide.
+
+  Resource effect: **4.33 × 10⁸** Lagrangian halos (3.62 × 10⁸ perturbed),
+  **12.1 GB** on disk and **22.3 GB** resident while perturbing — down from
+  9.37 × 10⁸ / 26.2 GB / 48.2 GB.
+
+### Changed
+
+- **The `int32_headroom` pre-flight guard now aborts instead of warning.** It
+  printed the correct diagnosis and then ran anyway, losing ~38 minutes of
+  cluster time to a segfault — twice. The `> 1.0` branch raises `SystemExit`
+  reporting the measured headroom, both concrete fixes with their computed
+  thresholds (`SAMPLER_MIN_MASS ≥ 1.31e8`, or `BOX_LEN ≤ 444.6` Mpc), and an
+  explicit note that narrowing the redshift range will not help. The
+  pre-flight banner also now prints the sampler floor and its retained
+  fraction.
+
+- **`provenance.estimate_catalogue_cost()` is sampler-aware.** It took only
+  `box_len` and hardcoded a `HALOS_PER_MPC3` measured at
+  `SAMPLER_MIN_MASS = 1e8`, so raising the floor would have left the
+  pre-flight over-estimating by ~2× and the new fatal guard aborting runs that
+  were actually safe. It now takes an optional `sampler_min_mass` — defaulting
+  to `SAMPLER_MIN_MASS_REFERENCE`, so the one-argument behaviour is unchanged
+  and asserted by a test — and scales by the new
+  `provenance.sampler_retained_fraction()`, a log-log interpolation over
+  `SAMPLER_RETAINED_FRACTION` (Sheth-Tormen cumulative counts, already
+  tabulated in `NUMBERS_AND_SOURCES.md` §12). The returned dict gains
+  `sampler_min_mass` and `sampler_retained_fraction`.
+
+### Added
+
+- **Eleven tests in `tests/test_provenance.py`** for the sampler floor:
+  tabulated-point reproduction, monotonicity, the reference-mass and
+  below-reference clamp, rejection of a non-positive floor, default-argument
+  equivalence, volume invariance, and the headline assertion that
+  `BOX_LEN = 486.33` overflows at 1e8 and clears at 2e8.
+
+- **`docs/HPC.md` §11.13** — full write-up: cause, why the redshift range is
+  irrelevant, the trade table, why not to shrink the box, and the guard and
+  estimator changes. Also `NUMBERS_AND_SOURCES.md` §1 and §12,
+  `docs/reference.md`, `src/smoke_test.py`'s override rationale.
+
+<!-- ─── kappa_UV re-sourced to a rising-SFH calibration, 2026-08-27 ─────── -->
+
+### Changed
+
+- **`_KAPPA_UV_MADAU14` $\kappa_\mathrm{UV}$: 1.15 × 10⁻²⁸ → 2.7 × 10⁻²⁹
+  (M☉/yr)/(erg/s/Hz) — a DEFINITIONAL change, not a rescaling.** Adopted from
+  **Fisher et al. (2026)**, MNRAS in press,
+  [arXiv:2511.10741](https://arxiv.org/abs/2511.10741), **Eq. 12** —
+  *"REBELS-IFU: Steeply rising star formation histories and the importance of
+  dust obscuration in massive z = 7 galaxies revealed by multi-wavelength
+  observations"*. Derived from JWST NIRSpec-fit **non-parametric** star
+  formation histories of 12 massive (log M⋆/M☉ = 9–10) Lyman-break galaxies at
+  z = 6.5–7.7 whose SFHs rise steeply rather than being constant:
+  $\kappa_\mathrm{UV} = (2.7 \pm 0.9)\times10^{-29}$.
+
+  **The value converts rest-UV luminosity to $\mathrm{SFR}_{100\,\mathrm{Myr}}$
+  — the SFR averaged over the prior 100 Myr — not an instantaneous or
+  constant SFR.** Three caveats are recorded verbatim in the
+  `src/conversions.py` definition, `NUMBERS_AND_SOURCES.md` §2 and new
+  `docs/HPC.md` §11.12, and are **deliberately left open for human review**:
+
+  1. **Definitional (most important) — a correctness question, not a
+     magnitude.** `analysis.euclid_sfr_window()` → `select_euclid_halos()`
+     apply this to 21cmFAST's `halo_sfr`, which is $M_\star/t_\mathrm{sf}$
+     with $t_\mathrm{sf} = t_\star t_H(z) = \mathbf{570.3\ Myr}$ at z = 7
+     (Park et al. 2019, Eq. 3) — a **5.7× longer averaging window** than the
+     100 Myr this $\kappa_\mathrm{UV}$ recovers, under a constant-SFH-like
+     prescription rather than a rising one. *Which halos count as
+     Euclid-detected changes meaning*, and $b_g$, $\bar n$ and the galaxy
+     field follow. `docs/halo_catalogue_reference.md` explicitly states the
+     relation assumes "Continuous star formation" — the adopted value
+     contradicts that documented assumption directly; a warning block was
+     added there rather than editing the historical text.
+  2. **Uncertainty.** ±0.9 on 2.7 is a **~33 % systematic**, far larger than a
+     typical calibration constant. Documented alongside the central value
+     everywhere it appears.
+  3. **Population specificity.** Calibrated on massive, rest-UV-bright REBELS
+     galaxies. Fisher et al. §6.4: *"conversion factors applicable to the more
+     abundant lower-mass galaxies at z ~ 7... may not be quite as low."* This
+     pipeline's Euclid window reaches $M_\mathrm{UV} = -18$, fainter than the
+     calibration sample, so applying it is an **extrapolation**.
+
+  **IMF (Caveat 2b) — reported, not resolved.** Fisher et al.'s Table 2
+  fiducial (constant-SFH) uses Chabrier (2003) and the Eq. 12 rising-SFH value
+  comes from the same BAGPIPES setup, so it is almost certainly Chabrier — but
+  this was not verified. It must be consistent with the IMF of the **Park et
+  al. (2019)** SFE model used elsewhere (`F_STAR10`, `ALPHA_STAR`, `t_STAR`),
+  and **this codebase does not record that IMF anywhere** — not in
+  `NUMBERS_AND_SOURCES.md` §1's entries, not in
+  `analysis.star_formation_timescale()`, not in `run_simulation.py` §4.
+  Consistency can be neither confirmed nor denied from the repository alone.
+
+  **Candidates weighed and not adopted**, recorded so the choice is visible:
+  `7.2e-29` (Chabrier 2003, **constant** SFH — Fisher et al. Table 2 fiducial)
+  and `1.15e-28` (raw **Salpeter**, constant SFH — Madau & Dickinson 2014,
+  ARA&A 52, 415, the previous value). The Dhandha et al. (2026)
+  (arXiv:2508.13761, Eq. 18) corroboration of `1.15e-28`, added earlier today,
+  still stands but now corroborates a **superseded** value, and is recorded
+  against the rejected candidate rather than the adopted one.
+
+  **Open labelling discrepancy, recorded not corrected.** This repository
+  labelled `1.15e-28` as "Chabrier (2003)" in six places, while
+  `docs/halo_catalogue_reference.md` called the same relation "Salpeter-like",
+  and Fisher et al. treat `1.15e-28` as the raw Salpeter value with `7.2e-29`
+  as the Chabrier equivalent. The repo labelling was internally inconsistent
+  and probably wrong; noted for review rather than silently rewritten.
+
+  **Downstream effect:**
+
+  | Quantity | 1.15 × 10⁻²⁸ | **2.7 × 10⁻²⁹** |
+  |---|---|---|
+  | Euclid window −22 ≤ $M_\mathrm{UV}$ ≤ −18 → SFR | 0.7956 – 31.674 M☉ yr⁻¹ | **0.1868 – 7.4364 M☉ yr⁻¹** |
+  | $\kappa_\mathrm{UV}$ ratio | — | **4.26× lower** |
+
+  **One consumer is provably immune.** `GALAXY_WEIGHTING = "luminosity"`
+  weights halos by $L_\mathrm{UV} = \mathrm{SFR}/\kappa_\mathrm{UV}$, but the
+  field is an *overdensity*, so the constant divides out — already asserted by
+  `tests/test_galaxy_weighting.py`. That mode is insensitive to this change.
+
+  **Call sites updated:** `src/conversions.py` (value plus a full provenance
+  and caveat block; the three `kappa_uv` docstring defaults),
+  `src/analysis.py` (`euclid_sfr_window` — now carries a `.. warning::` about
+  the SFR-definition mismatch — the `GALAXY_WEIGHTING_MODES` comment, and the
+  luminosity-weighting docstring), `run_simulation.py` (weighting comment).
+  **Docs:** `NUMBERS_AND_SOURCES.md` §2, new `docs/HPC.md` §11.12 plus §5.3
+  and §12, `docs/reference.md` (conversion table, function table, bibliography
+  — Fisher added, Madau & Dickinson and Dhandha marked superseded),
+  `docs/simulation_spec.md`, `docs/halo_catalogue_reference.md` (conflict
+  warning).
+
+  **The constant keeps the name `_KAPPA_UV_MADAU14`** so no call site breaks.
+  The name is no longer accurate and is a rename candidate.
+
+  **Not yet in effect, and not patchable.** Halo selection happens at
+  simulation time, so `outputs/lightcone_data.h5` still holds the old window
+  until `bash submit_job.sh --sim force`. Unlike $\sigma_z$ or $\bar n$, this
+  cannot be fixed by an HDF5 attribute patch — it changes *which halos are
+  selected*.
+
 <!-- ─── M_UV/m_AB conversion + kappa_UV corroboration, 2026-08-27 ───────── -->
 
 ### Added

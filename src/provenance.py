@@ -29,6 +29,7 @@ Usage
 from __future__ import annotations
 
 import json
+import math
 import os
 import platform
 import socket
@@ -42,6 +43,9 @@ __all__ = [
     "BYTES_PER_HALO",
     "PERTURBED_FRACTION",
     "INT32_MAX",
+    "SAMPLER_MIN_MASS_REFERENCE",
+    "SAMPLER_RETAINED_FRACTION",
+    "sampler_retained_fraction",
     "RunManifest",
     "estimate_catalogue_cost",
     "environment_info",
@@ -69,6 +73,26 @@ PERTURBED_FRACTION = 114_289_081 / 136_663_818  # 0.836
 #: ``int``, so a catalogue whose flattened coordinate array exceeds this is at
 #: risk of overflowing regardless of how much memory the node has.
 INT32_MAX = 2 ** 31 - 1
+
+#: Sampler floor the empirical calibration above was measured at [M_sun].
+SAMPLER_MIN_MASS_REFERENCE = 1e8
+
+#: Fraction of the halo *count* that survives raising ``SAMPLER_MIN_MASS``
+#: above :data:`SAMPLER_MIN_MASS_REFERENCE`.  Sheth-Tormen cumulative counts
+#: from ``hmf.MassFunction(z=7, dlog10m=0.02)``; see NUMBERS_AND_SOURCES.md
+#: §12.  Interpolated log-log by :func:`sampler_retained_fraction`.
+#:
+#: The companion figures — star formation retained under the same floors,
+#: weighted by M f_star with f_star proportional to
+#: (M/1e10)^0.5 exp(-M_TURN/M) — are 99.95 % / 99.84 % / 99.44 %.  Raising the
+#: floor therefore discards objects, not star formation, because M_TURN = 5e8
+#: already suppresses everything below it.
+SAMPLER_RETAINED_FRACTION = {
+    1.0e8: 1.000,
+    1.5e8: 0.631,
+    2.0e8: 0.462,
+    3.0e8: 0.287,
+}
 
 
 # ===========================================================================
@@ -234,19 +258,82 @@ def peak_memory_gb() -> Optional[float]:
 #  Pre-flight cost estimate
 # ===========================================================================
 
-def estimate_catalogue_cost(box_len: float) -> Dict[str, float]:
+def sampler_retained_fraction(sampler_min_mass: float) -> float:
+    """
+    Fraction of the halo count surviving a given ``SAMPLER_MIN_MASS``.
+
+    Interpolates :data:`SAMPLER_RETAINED_FRACTION` log-log in mass, relative
+    to :data:`SAMPLER_MIN_MASS_REFERENCE`, at which the fraction is 1.
+
+    Parameters
+    ----------
+    sampler_min_mass : float
+        Halo sampler floor [M_sun].
+
+    Returns
+    -------
+    float
+        Retained fraction in (0, 1].  Floors below the reference mass return
+        1.0 rather than extrapolating upward, since the empirical calibration
+        cannot say how many more halos a lower floor would draw.
+
+    Raises
+    ------
+    ValueError
+        If ``sampler_min_mass`` is not positive.
+
+    Notes
+    -----
+    Above the tabulated range the last log-log segment is extended, which
+    understates the retained fraction; treat far extrapolations as indicative
+    only.  See NUMBERS_AND_SOURCES.md §12 for the tabulated values.
+    """
+    if sampler_min_mass <= 0:
+        raise ValueError(
+            f"sampler_min_mass must be positive, got {sampler_min_mass!r}"
+        )
+    if sampler_min_mass <= SAMPLER_MIN_MASS_REFERENCE:
+        return 1.0
+
+    masses = sorted(SAMPLER_RETAINED_FRACTION)
+    log_m = [math.log(m) for m in masses]
+    log_f = [math.log(SAMPLER_RETAINED_FRACTION[m]) for m in masses]
+
+    if sampler_min_mass >= masses[-1]:
+        lo, hi = -2, -1
+    else:
+        hi = next(i for i, m in enumerate(masses) if m >= sampler_min_mass)
+        lo = hi - 1
+
+    slope = (log_f[hi] - log_f[lo]) / (log_m[hi] - log_m[lo])
+    return float(
+        math.exp(log_f[lo] + slope * (math.log(sampler_min_mass) - log_m[lo]))
+    )
+
+
+def estimate_catalogue_cost(
+    box_len: float,
+    sampler_min_mass: float = SAMPLER_MIN_MASS_REFERENCE,
+) -> Dict[str, float]:
     """
     Extrapolate the halo-catalogue cost of a box from a measured run.
 
     The halo sampler's floor is a fixed mass (``SAMPLER_MIN_MASS``), not a
     grid property, so the catalogue scales with comoving volume and is
     independent of ``HII_DIM``.  Scaling :data:`HALOS_PER_MPC3` by the volume
-    therefore predicts the count for any box at the same sampler settings.
+    therefore predicts the count for any box at the same sampler settings; a
+    floor above :data:`SAMPLER_MIN_MASS_REFERENCE` scales it down further by
+    :func:`sampler_retained_fraction`.
 
     Parameters
     ----------
     box_len : float
         Comoving box side length [Mpc].
+    sampler_min_mass : float, optional
+        Halo sampler floor [M_sun].  Defaults to
+        :data:`SAMPLER_MIN_MASS_REFERENCE`, the value the calibration was
+        measured at, which reproduces the historical single-argument
+        behaviour exactly.
 
     Returns
     -------
@@ -269,11 +356,14 @@ def estimate_catalogue_cost(box_len: float) -> Dict[str, float]:
     settings.  Treat it as an order-of-magnitude guard, not a budget.
     """
     volume = float(box_len) ** 3
-    n_lagrangian = HALOS_PER_MPC3 * volume
+    retained = sampler_retained_fraction(sampler_min_mass)
+    n_lagrangian = HALOS_PER_MPC3 * volume * retained
     catalogue_bytes = n_lagrangian * BYTES_PER_HALO
 
     return {
         "volume_Mpc3": volume,
+        "sampler_min_mass": float(sampler_min_mass),
+        "sampler_retained_fraction": retained,
         "n_halos_lagrangian": n_lagrangian,
         "n_halos_perturbed": n_lagrangian * PERTURBED_FRACTION,
         "catalogue_GB": catalogue_bytes / 1e9,

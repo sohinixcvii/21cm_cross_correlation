@@ -240,6 +240,43 @@ BOX_LEN = SIM_BOX.box_len    # 486.33 Mpc comoving, from the 10 deg^2 footprint
 DIM     = SIM_BOX.dim        # 768, high-res grid for initial conditions
 
 # ---------------------------------------------------------------------------
+#  Halo sampler floor  (constrained by a 32-bit index, not by physics)
+# ---------------------------------------------------------------------------
+# The stochastic halo sampler populates every cell down to this mass, so the
+# catalogue size scales with BOX_LEN^3 and NOT with the lightcone redshift
+# range -- narrowing z_min/z_max does nothing to it.
+#
+# 21cmFAST's C backend indexes halo arrays with `int`.  `halo_coords` holds
+# 3 * N_halos elements, so the catalogue overflows a signed 32-bit index once
+# N_halos > INT_MAX/3 = 7.158e8, and the run SEGFAULTS regardless of how much
+# memory the node has.  At the footprint-derived BOX_LEN = 486.33 Mpc the
+# template default of 1e8 draws 9.370e8 halos -- 1.31x over the limit.
+#
+# 2e8 was chosen over shrinking BOX_LEN because it costs objects, not physics:
+#
+#   SAMPLER_MIN_MASS   halo count   star formation   int32 headroom
+#         1e8            100 %          100 %            1.31  <-- segfaults
+#       1.5e8             63.1 %         99.95 %          0.83
+#       2e8               46.2 %         99.84 %          0.61  <-- adopted
+#       3e8               28.7 %         99.44 %          0.38
+#
+# Star formation is retained almost entirely because M_TURN = 5e8 (section 4)
+# puts exp(-M_TURN/M_h) on the stellar fraction: a 1e8 halo forms stars at
+# exp(-5) = 0.7 % of its unsuppressed rate.  Raising the floor to 2e8 discards
+# just over half the *objects* and 0.16 % of the *star formation*, so the
+# ionizing budget, the 21 cm field and the Euclid selection (which lives at
+# ~1e10-1e11 M_sun) are all effectively untouched.
+#
+# Shrinking BOX_LEN instead would need <= 444.6 Mpc, which breaks the
+# traceability survey_area_to_box_size() exists to provide -- 486.33 Mpc
+# encodes the 10 deg^2 EDF-Fornax footprint.
+#
+# Retained fractions are Sheth-Tormen cumulative counts from
+# hmf.MassFunction(z=7, dlog10m=0.02); see NUMBERS_AND_SOURCES.md section 12
+# and provenance.SAMPLER_RETAINED_FRACTION.
+SAMPLER_MIN_MASS = 2e8       # halo sampler floor [M_sun]
+
+# ---------------------------------------------------------------------------
 #  Lightcone redshift range
 # ---------------------------------------------------------------------------
 # SMOKE-TEST SLAB — deliberately narrow. Delta z = 0.01 gives L_LOS = 3.5 Mpc
@@ -556,20 +593,35 @@ print(f"Estimator   : {ESTIMATOR}  (LOS sampling {LIGHTCONE_SAMPLING}, "
 # catalogue scales with volume, so a modest-looking change in BOX_LEN is a
 # large change in memory: 256 -> 486.33 Mpc is 6.9x, which is what killed the
 # 2026-08-20 run with SIGSEGV.
-cost = estimate_catalogue_cost(BOX_LEN)
+cost = estimate_catalogue_cost(BOX_LEN, SAMPLER_MIN_MASS)
+print(f"Sampler     : SAMPLER_MIN_MASS = {SAMPLER_MIN_MASS:.2e} M⊙  →  "
+      f"{cost['sampler_retained_fraction']:.1%} of halos, "
+      f"{cost['int32_headroom']:.2f}x INT_MAX")
 print(f"Est. halos  : {cost['n_halos_lagrangian']:.3e} drawn "
       f"({cost['n_halos_perturbed']:.3e} after perturbation) in "
       f"{cost['volume_Mpc3']:.3e} Mpc³  →  {cost['catalogue_GB']:.1f} GB on disk, "
       f"~{cost['resident_GB']:.1f} GB resident while perturbing")
 
 if cost["int32_headroom"] > 1.0:
-    print(
-        f"\n  *** WARNING: halo_coords would hold "
+    # Fatal, not a warning.  This previously printed and then ran anyway,
+    # segfaulting ~38 minutes into the halo stage with exit code -11 and no
+    # usable output.  There is no configuration of memory or thread count that
+    # makes an over-length 32-bit index work, so there is nothing to be gained
+    # by continuing.
+    raise SystemExit(
+        f"\n  *** ABORT: halo_coords would hold "
         f"{cost['n_halos_lagrangian'] * 3:.3e} elements, "
         f"{cost['int32_headroom']:.2f}x INT_MAX ({INT32_MAX:.3e}).\n"
-        f"      21cmFAST indexes halo arrays with int; this box may overflow\n"
-        f"      regardless of available memory.  Reduce BOX_LEN or raise\n"
-        f"      SAMPLER_MIN_MASS before committing cluster time. ***\n"
+        f"      21cmFAST indexes halo arrays with int, so this box WILL\n"
+        f"      overflow and segfault regardless of available memory.\n"
+        f"      BOX_LEN = {BOX_LEN:.2f} Mpc, SAMPLER_MIN_MASS = "
+        f"{SAMPLER_MIN_MASS:.2e} M_sun "
+        f"(retains {cost['sampler_retained_fraction']:.1%} of halos).\n"
+        f"      Fix: raise SAMPLER_MIN_MASS to >= "
+        f"{SAMPLER_MIN_MASS * cost['int32_headroom']:.2e}, or reduce BOX_LEN\n"
+        f"      to <= {BOX_LEN / cost['int32_headroom'] ** (1/3):.1f} Mpc.\n"
+        f"      Narrowing the redshift range will NOT help: the catalogue is\n"
+        f"      drawn in the full BOX_LEN^3 cube, not the lightcone slab. ***\n"
     )
 elif cost["int32_headroom"] > 0.5:
     print(f"  (halo_coords at {cost['int32_headroom']:.2f}x INT_MAX — "
@@ -673,10 +725,14 @@ if HAS_21CMFAST:
     inputs = inputs.clone(
         node_redshifts=node_redshifts,
         simulation_options={
-            "HII_DIM":   HII_DIM,
-            "BOX_LEN":   BOX_LEN,
-            "DIM":       DIM,
-            "N_THREADS": N_THREADS,
+            "HII_DIM":          HII_DIM,
+            "BOX_LEN":          BOX_LEN,
+            "DIM":              DIM,
+            "N_THREADS":        N_THREADS,
+            # Not a physics choice — see the config block.  Left out of this
+            # clone, the "simple" template's 1e8 overflows the 32-bit halo
+            # index at the footprint-derived BOX_LEN.
+            "SAMPLER_MIN_MASS": SAMPLER_MIN_MASS,
         },
         matter_options={
             "USE_INTERPOLATION_TABLES": "hmf-interpolation",

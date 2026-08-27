@@ -334,7 +334,7 @@ Simulation data points are converted from SFR to $M_\mathrm{UV}$ and binned into
 
 | Step | Equation | Reference |
 |------|----------|-----------|
-| SFR → $L_\mathrm{UV}$ | $L_\mathrm{UV} = \mathrm{SFR} / \kappa_\mathrm{UV}$, $\kappa_\mathrm{UV} = 1.15\times10^{-28}\ M_\odot\ \mathrm{yr}^{-1}\ /\ (\mathrm{erg\ s}^{-1}\ \mathrm{Hz}^{-1})$ | Madau & Dickinson (2014), Chabrier IMF, ~1500 Å |
+| SFR → $L_\mathrm{UV}$ | $L_\mathrm{UV} = \mathrm{SFR} / \kappa_\mathrm{UV}$, $\kappa_\mathrm{UV} = (2.7 \pm 0.9)\times10^{-29}\ M_\odot\ \mathrm{yr}^{-1}\ /\ (\mathrm{erg\ s}^{-1}\ \mathrm{Hz}^{-1})$ | Fisher et al. (2026), arXiv:2511.10741, Eq. 12 — rising-SFH calibration recovering $\mathrm{SFR}_{100\,\mathrm{Myr}}$, **not** a constant/instantaneous SFR. ~33 % systematic. Three caveats in `NUMBERS_AND_SOURCES.md` §2 |
 | $L_\mathrm{UV}$ → $M_\mathrm{UV}$ | $M_\mathrm{AB} = 51.60 - 2.5\log_{10}(L_\nu)$ | Oke & Gunn (1983) |
 
 *Schechter function form* (implemented inline as `schechter_muv()`):
@@ -484,13 +484,18 @@ from src.conversions import (
 | `Muv_to_Luv(Muv)` | Absolute UV AB magnitude → monochromatic luminosity [erg s⁻¹ Hz⁻¹] |
 | `Luv_to_Muv(Luv)` | Monochromatic luminosity [erg s⁻¹ Hz⁻¹] → absolute UV AB magnitude |
 
-**UV luminosity – SFR conversions** (Madau & Dickinson 2014, Chabrier IMF, $\kappa_\mathrm{UV} = 1.15\times10^{-28}\ M_\odot\ \mathrm{yr}^{-1}\ /\ (\mathrm{erg\ s}^{-1}\ \mathrm{Hz}^{-1})$)
+**UV luminosity – SFR conversions** (Fisher et al. 2026, arXiv:2511.10741, Eq. 12, $\kappa_\mathrm{UV} = (2.7 \pm 0.9)\times10^{-29}\ M_\odot\ \mathrm{yr}^{-1}\ /\ (\mathrm{erg\ s}^{-1}\ \mathrm{Hz}^{-1})$)
+
+> **These recover $\mathrm{SFR}_{100\,\mathrm{Myr}}$ from rising SFHs**, not an
+> instantaneous or constant SFR. Substituting this value changes what "SFR"
+> *means* downstream, not just its magnitude — see `NUMBERS_AND_SOURCES.md`
+> §2, Caveat 1.
 
 | Function | Description |
 |----------|-------------|
-| `Luv_to_sfr(Luv, kappa_uv=1.15e-28)` | UV luminosity [erg s⁻¹ Hz⁻¹] → SFR [M☉ yr⁻¹] |
-| `sfr_to_Luv(sfr, kappa_uv=1.15e-28)` | SFR [M☉ yr⁻¹] → UV luminosity [erg s⁻¹ Hz⁻¹] |
-| `sfr_to_Muv(sfr, kappa_uv=1.15e-28)` | SFR [M☉ yr⁻¹] → absolute UV AB magnitude (chains `sfr_to_Luv` → `Luv_to_Muv`) |
+| `Luv_to_sfr(Luv, kappa_uv=2.7e-29)` | UV luminosity [erg s⁻¹ Hz⁻¹] → SFR [M☉ yr⁻¹] |
+| `sfr_to_Luv(sfr, kappa_uv=2.7e-29)` | SFR [M☉ yr⁻¹] → UV luminosity [erg s⁻¹ Hz⁻¹] |
+| `sfr_to_Muv(sfr, kappa_uv=2.7e-29)` | SFR [M☉ yr⁻¹] → absolute UV AB magnitude (chains `sfr_to_Luv` → `Luv_to_Muv`) |
 
 **Halo bias**
 
@@ -519,7 +524,7 @@ so growing the box does not coarsen the mass resolution:
 |------|-----------|-----------------|
 | `DIM` (initial conditions / density field) | 0.633 Mpc | $1.01\times10^{10}\ M_\odot$ per cell |
 | `HII_DIM` (ionisation, 21 cm brightness) | 1.90 Mpc | $2.72\times10^{11}\ M_\odot$ per cell |
-| Halo catalogue (`SAMPLER_MIN_MASS`) | — | $1\times10^{8}\ M_\odot$ (smallest sampled halo) |
+| Halo catalogue (`SAMPLER_MIN_MASS`) | — | $2\times10^{8}\ M_\odot$ (smallest sampled halo; raised from $1\times10^{8}$ — see `HPC.md` §11.13) |
 
 > The halo catalogue is *not* limited by the grid mass resolution: 21cmFAST's
 > stochastic halo sampler populates each cell down to `SAMPLER_MIN_MASS`, so
@@ -911,6 +916,8 @@ constrained layout for that figure and emit a warning.
 - **Planck Collaboration (2020)**, A&A, 641, A6 — [arXiv:1807.06209](https://arxiv.org/abs/1807.06209) — cosmological parameters
 - **Hogg (1999)** — [arXiv:astro-ph/9905116](https://arxiv.org/abs/astro-ph/9905116) — comoving distance and volume formulae
 - **Oke & Gunn (1983)**, ApJ, 266, 713 — AB magnitude system
-- **Madau & Dickinson (2014)**, ARA&A, 52, 415 — [arXiv:1403.0007](https://arxiv.org/abs/1403.0007) — UV luminosity–SFR calibration ($\kappa_\mathrm{UV}$, Chabrier IMF)
+- **Fisher et al. (2026)**, MNRAS in press — [arXiv:2511.10741](https://arxiv.org/abs/2511.10741) — *REBELS-IFU*: rising SFHs at z = 7; **the adopted $\kappa_\mathrm{UV}$** (Eq. 12)
+- **Madau & Dickinson (2014)**, ARA&A, 52, 415 — [arXiv:1403.0007](https://arxiv.org/abs/1403.0007) — UV luminosity–SFR calibration; **superseded** source of the previous $\kappa_\mathrm{UV} = 1.15\times10^{-28}$
+- **Dhandha et al. (2026)**, MNRAS in press — [arXiv:2508.13761](https://arxiv.org/abs/2508.13761) — Eq. 18 independently confirms $1.15\times10^{-28}$; corroborates the **superseded** value
 - **Sheth & Tormen (1999)**, MNRAS, 308, 119 — [arXiv:astro-ph/9901122](https://arxiv.org/abs/astro-ph/9901122) — halo mass function and bias formula
 - **Murray, Robotham & Power (2013)**, Astron. Comput., 3, 23 — [arXiv:1306.6721](https://arxiv.org/abs/1306.6721) — `hmf` halo mass function code

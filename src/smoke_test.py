@@ -156,9 +156,11 @@ SMOKE_TEST_UNCHANGED: Dict[str, str] = {
         "same source model as production"
     ),
     "SAMPLER_MIN_MASS": (
-        "left at the template default; shrinking the box already removes the "
-        "catalogue cost, and raising the mass floor would change which halos "
-        "exist rather than how many boxes' worth of them do"
+        "left at the production value; shrinking the box already removes the "
+        "catalogue cost, and changing the mass floor would change which halos "
+        "exist rather than how many boxes' worth of them do.  Production sets "
+        "it to 2e8 to stay inside the 32-bit halo index (run_simulation.py "
+        "config block); the smoke box is far too small for that to bind"
     ),
 }
 

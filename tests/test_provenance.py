@@ -16,6 +16,8 @@ import pytest
 from src import provenance
 from src.provenance import (
     INT32_MAX,
+    SAMPLER_MIN_MASS_REFERENCE,
+    SAMPLER_RETAINED_FRACTION,
     RunManifest,
     environment_info,
     estimate_catalogue_cost,
@@ -23,6 +25,7 @@ from src.provenance import (
     package_versions,
     peak_memory_gb,
     resolve_n_threads,
+    sampler_retained_fraction,
 )
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -259,3 +262,76 @@ def test_calibration_constants_are_self_consistent() -> None:
     assert provenance.HALOS_PER_MPC3 == pytest.approx(8.146, rel=1e-3)
     assert provenance.BYTES_PER_HALO == pytest.approx(28.0, rel=1e-3)
     assert provenance.PERTURBED_FRACTION == pytest.approx(0.836, rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
+#  SAMPLER_MIN_MASS and the 32-bit halo index
+# ---------------------------------------------------------------------------
+
+
+def test_retained_fraction_is_one_at_and_below_the_reference_mass() -> None:
+    """The calibration was measured at 1e8; it cannot extrapolate downward."""
+    assert sampler_retained_fraction(SAMPLER_MIN_MASS_REFERENCE) == 1.0
+    assert sampler_retained_fraction(1e7) == 1.0
+
+
+@pytest.mark.parametrize("mass", sorted(SAMPLER_RETAINED_FRACTION))
+def test_retained_fraction_reproduces_its_tabulated_points(mass) -> None:
+    """Interpolation must pass through every tabulated value."""
+    assert sampler_retained_fraction(mass) == pytest.approx(
+        SAMPLER_RETAINED_FRACTION[mass], rel=1e-9
+    )
+
+
+def test_retained_fraction_decreases_with_the_floor() -> None:
+    """A higher mass floor can only keep fewer halos."""
+    masses = [1e8, 1.25e8, 1.5e8, 2e8, 2.5e8, 3e8]
+    fractions = [sampler_retained_fraction(m) for m in masses]
+    assert all(b < a for a, b in zip(fractions, fractions[1:]))
+
+
+def test_retained_fraction_rejects_a_non_positive_floor() -> None:
+    """A zero or negative mass floor is a configuration error, not a default."""
+    for bad in (0.0, -1e8):
+        with pytest.raises(ValueError, match="sampler_min_mass"):
+            sampler_retained_fraction(bad)
+
+
+def test_cost_estimate_default_reproduces_the_reference_calibration() -> None:
+    """Omitting the floor must behave exactly as the one-argument form did."""
+    assert estimate_catalogue_cost(486.33) == estimate_catalogue_cost(
+        486.33, SAMPLER_MIN_MASS_REFERENCE
+    )
+
+
+def test_raising_the_sampler_floor_clears_the_int32_guard() -> None:
+    """
+    The adopted production setting must fit inside a signed 32-bit index.
+
+    BOX_LEN = 486.33 Mpc overflows at the template's 1e8 floor (1.31x
+    INT_MAX, the run that segfaulted).  SAMPLER_MIN_MASS = 2e8 is the adopted
+    fix: it keeps the footprint-derived box and brings the flattened
+    ``halo_coords`` to 0.61x INT_MAX.
+    """
+    overflowing = estimate_catalogue_cost(486.33, 1e8)
+    adopted = estimate_catalogue_cost(486.33, 2e8)
+
+    assert overflowing["int32_headroom"] > 1.0
+    assert adopted["int32_headroom"] < 1.0
+    assert adopted["int32_headroom"] == pytest.approx(0.605, abs=0.01)
+    assert adopted["n_halos_lagrangian"] * 3 < INT32_MAX
+
+
+def test_cost_estimate_reports_the_floor_it_used() -> None:
+    """The floor and its retained fraction travel with the estimate."""
+    cost = estimate_catalogue_cost(486.33, 2e8)
+    assert cost["sampler_min_mass"] == 2e8
+    assert cost["sampler_retained_fraction"] == pytest.approx(0.462, rel=1e-9)
+
+
+def test_the_sampler_floor_does_not_change_the_volume() -> None:
+    """The floor scales the catalogue, not the box it is drawn in."""
+    for mass in (1e8, 2e8, 3e8):
+        assert estimate_catalogue_cost(486.33, mass)["volume_Mpc3"] == (
+            pytest.approx(486.33 ** 3)
+        )

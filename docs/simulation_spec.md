@@ -160,7 +160,7 @@ the grid, `USE_INTERPOLATION_TABLES = "hmf-interpolation"` and
 
 | Group | Parameter | Value |
 |---|---|---|
-| Selection | `M_UV_limit` (faint) / `M_UV_bright` | **−18** / **−22** → SFR ∈ [0.7956, 31.674] M☉ yr⁻¹ |
+| Selection | `M_UV_limit` (faint) / `M_UV_bright` | **−18** / **−22** → SFR ∈ **[0.1868, 7.4364]** M☉ yr⁻¹ at $\kappa_\mathrm{UV} = 2.7\times10^{-29}$ (Fisher et al. 2026) |
 | | `mean_galaxy_density` n̄ | **7.48 × 10⁻⁵ Mpc⁻³** (plain Mpc⁻³, *not* h³ Mpc⁻³) → P_N,gal = 13 368.98 Mpc³ — Euclid Collab.: Allen et al. (2026), A&A 711, A25, Table 2; see `HPC.md` §11.10 |
 | | `GALAXY_WEIGHTING` | `lightcone_sfr` (alternatives: `number`, `luminosity`) |
 | | `galaxy_bias` | 8 — **fallback only**; the catalogue estimator overwrites it (4.744 at 256 Mpc **[M]**) |

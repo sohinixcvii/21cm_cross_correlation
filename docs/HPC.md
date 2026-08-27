@@ -235,7 +235,7 @@ Computed with `Planck18.comoving_distance`:
 |---|---|---|
 | `DIM` = 384 (initial conditions) | 0.6667 Mpc | **1.175 × 10¹⁰ M☉** |
 | `HII_DIM` = 128 (ionisation, 21 cm) | 2.0 Mpc | **3.173 × 10¹¹ M☉** |
-| Halo sampler floor `SAMPLER_MIN_MASS` | — | **1 × 10⁸ M☉** |
+| Halo sampler floor `SAMPLER_MIN_MASS` | — | **2 × 10⁸ M☉** (raised from the template's 1 × 10⁸ to stay inside the 32-bit halo index — §11.13) |
 
 ### 4.3 21cmFAST invocation (§2)
 
@@ -364,7 +364,8 @@ $$L_\mathrm{UV} = \mathrm{SFR}/\kappa_\mathrm{UV},\quad
 M_\mathrm{UV} = 51.60 - 2.5\log_{10} L_\mathrm{UV}$$
 
 The Euclid window $-22 \le M_\mathrm{UV} \le -18$ is therefore equivalent to
-**SFR ∈ [0.7956, 31.674] M☉ yr⁻¹**.
+**SFR ∈ [0.1868, 7.4364] M☉ yr⁻¹** (was [0.7956, 31.674] under the
+superseded $\kappa_\mathrm{UV} = 1.15\times10^{-28}$; see §11.12).
 
 **Star-formation timescale** (`src.analysis.star_formation_timescale`,
 Park et al. 2019 Eq. 3):
@@ -1043,6 +1044,148 @@ Full notes in `NUMBERS_AND_SOURCES.md` §5.
 HDF5 root attrs, so `outputs/lightcone_data.h5` keeps 0.45 until
 `bash submit_job.sh --sim force` or an attribute patch (§11.7).
 
+
+### 11.12 $\kappa_\mathrm{UV}$ now assumes rising SFHs — a definitional change
+
+**Updated 2026-08-27: `_KAPPA_UV_MADAU14` 1.15 × 10⁻²⁸ → 2.7 × 10⁻²⁹.**
+
+Adopted from **Fisher et al. (2026)**, MNRAS in press,
+[arXiv:2511.10741](https://arxiv.org/abs/2511.10741), **Eq. 12** — *REBELS-IFU:
+Steeply rising star formation histories and the importance of dust obscuration
+in massive z = 7 galaxies*. Derived from JWST NIRSpec-fit **non-parametric**
+SFHs of 12 massive (log M⋆/M☉ = 9–10) LBGs at z = 6.5–7.7 whose SFHs rise
+steeply:
+
+$$\kappa_\mathrm{UV} = (2.7 \pm 0.9)\times10^{-29}\ M_\odot\,\mathrm{yr}^{-1}
+/ (\mathrm{erg\,s^{-1}\,Hz^{-1}})$$
+
+**This is not a rescaling.** The value converts rest-UV luminosity to
+$\mathrm{SFR}_{100\,\mathrm{Myr}}$ — the SFR averaged over the prior 100 Myr —
+from a *rising*-SFH population. It is not an instantaneous or constant-SFH
+calibration. Three caveats are recorded in full in `NUMBERS_AND_SOURCES.md` §2
+and are **deliberately left open**:
+
+1. **Definitional (most important).** `analysis.euclid_sfr_window()` →
+   `select_euclid_halos()` apply this to 21cmFAST's `halo_sfr`, which is
+   $M_\star/t_\mathrm{sf}$ with $t_\mathrm{sf} = t_\star t_H(z) =
+   \mathbf{570.3\ Myr}$ at z = 7 (Park et al. 2019, Eq. 3) — a **5.7× longer
+   averaging window**, under a constant-SFH-like prescription rather than a
+   rising one. *Which halos count as Euclid-detected changes meaning*, and
+   $b_g$, $\bar n$ and the galaxy field follow. §5.3 of this document and
+   `docs/halo_catalogue_reference.md` (which states "Continuous star
+   formation") both now conflict with the adopted value.
+2. **Uncertainty.** ±0.9 on 2.7 is **~33 %**, far larger than a typical
+   calibration constant. Forecasts quoting anything derived through it should
+   carry that spread.
+3. **Population specificity.** Calibrated on massive, rest-UV-bright REBELS
+   galaxies. Fisher et al. §6.4: *"conversion factors applicable to the more
+   abundant lower-mass galaxies at z ~ 7... may not be quite as low."* Our
+   Euclid window reaches $M_\mathrm{UV} = -18$, fainter than the calibration
+   sample — so this is an **extrapolation**.
+
+**IMF — unverified (Caveat 2b).** Fisher et al.'s Table 2 fiducial uses
+Chabrier (2003) and Eq. 12 comes from the same BAGPIPES setup, so it is almost
+certainly Chabrier too — but that was not verified, and **this codebase does
+not record the IMF assumed by the Park et al. (2019) SFE model** it must be
+consistent with. Neither confirmed nor denied from the repository alone.
+
+**Candidates weighed, not adopted:** `7.2e-29` (Chabrier, *constant* SFH —
+Fisher et al. Table 2 fiducial) and `1.15e-28` (raw Salpeter, constant SFH —
+Madau & Dickinson 2014, the previous value). Dhandha et al. (2026),
+arXiv:2508.13761 Eq. 18 independently confirms `1.15e-28`; that corroboration
+stands but now applies to a **superseded** value.
+
+**Open labelling discrepancy.** This repo labelled `1.15e-28` as "Chabrier",
+while `halo_catalogue_reference.md` called the same relation "Salpeter-like"
+and Fisher et al. treat `1.15e-28` as raw Salpeter with `7.2e-29` as the
+Chabrier equivalent. Recorded for review, **not** silently corrected.
+
+**What changes numerically.**
+
+| Quantity | 1.15 × 10⁻²⁸ | **2.7 × 10⁻²⁹** |
+|---|---|---|
+| Euclid window −22 ≤ $M_\mathrm{UV}$ ≤ −18 → SFR | 0.7956 – 31.674 M☉ yr⁻¹ | **0.1868 – 7.4364 M☉ yr⁻¹** |
+| $\kappa_\mathrm{UV}$ ratio | — | **4.26× lower** |
+| Quoted systematic | none | **±33 %** |
+
+**One consumer is provably immune.** `GALAXY_WEIGHTING = "luminosity"` weights
+halos by $L_\mathrm{UV} = \mathrm{SFR}/\kappa_\mathrm{UV}$, but the field is an
+*overdensity*, so the constant divides out — asserted by
+`tests/test_galaxy_weighting.py`. The weighting mode is insensitive to this
+change.
+
+**Not yet in effect.** The halo selection runs at simulation time, so the
+stored catalogue in `outputs/lightcone_data.h5` still reflects the old window
+until `bash submit_job.sh --sim force`. Unlike $\sigma_z$ or $\bar n$, this one
+**cannot** be fixed by an attribute patch — it changes which halos are
+selected.
+
+
+### 11.13 The halo catalogue overflows a 32-bit index — `SAMPLER_MIN_MASS` 1e8 → 2e8
+
+**Fixed 2026-08-27.** A production attempt at z = 6.89–7.11 died with
+**exit code −11 (SIGSEGV)** immediately after the lightcone stage began.
+
+**Cause.** 21cmFAST's C backend indexes halo arrays with `int`. `halo_coords`
+holds `3 × N_halos` elements, so the array overflows a signed 32-bit index
+once `N_halos > INT_MAX/3 = 7.158 × 10⁸`. At the footprint-derived
+`BOX_LEN = 486.33` Mpc the `"simple"` template's `SAMPLER_MIN_MASS = 1e8`
+draws **9.370 × 10⁸** halos — `3N = 2.811 × 10⁹`, or **1.31 × INT_MAX**. The
+index wraps negative and the process segfaults. This is **not** a memory
+problem; no node size or thread count fixes it.
+
+> **Narrowing the redshift range cannot help, and this is the trap.** The halo
+> catalogue is drawn in the full **cubic** box —
+> `estimate_catalogue_cost()` is `HALOS_PER_MPC3 × BOX_LEN³`, and the failing
+> run's own banner confirms it: `1.150e8 Mpc³ = 486.33³`. The lightcone
+> redshift range only decides how many slices are *kept afterwards*. Going
+> from z = 6.55–7.45 to 6.89–7.11 changed nothing about the draw, which is why
+> the run failed identically.
+
+**Fix — `SAMPLER_MIN_MASS = 2 × 10⁸ M☉`**, set in the `run_simulation.py`
+config block and passed through `inputs.simulation_options`. It was previously
+inherited silently from the template and was not settable.
+
+| `SAMPLER_MIN_MASS` | Halo count | Star formation | `int32_headroom` |
+|---|---|---|---|
+| 1 × 10⁸ (template) | 100 % | 100 % | **1.31 — segfaults** |
+| 1.5 × 10⁸ | 63.1 % | 99.95 % | 0.83 |
+| **2 × 10⁸ (adopted)** | **46.2 %** | **99.84 %** | **0.61** |
+| 3 × 10⁸ | 28.7 % | 99.44 % | 0.38 |
+
+**Why this costs almost nothing.** `M_TURN = 5 × 10⁸` (§4) puts
+`exp(−M_TURN/M_h)` on the stellar fraction, so a 10⁸ M☉ halo forms stars at
+`exp(−5) = 0.7 %` of its unsuppressed rate. Raising the floor to 2 × 10⁸
+discards just over half the *objects* and **0.16 % of the star formation** —
+the ionizing budget, the 21 cm field, and the Euclid selection (which lives at
+~10¹⁰–10¹¹ M☉, two to three decades above the floor) are all effectively
+untouched.
+
+**Why not shrink the box.** Headroom 1.0 needs `BOX_LEN ≤ 444.6` Mpc, which
+breaks exactly the traceability `survey_area_to_box_size()` exists to provide:
+486.33 Mpc *is* the 10 deg² EDF-Fornax footprint at z = 7. Raising a sampler
+floor that is already below `M_TURN` is the cheaper trade.
+
+**Resource effect at the adopted setting** (`estimate_catalogue_cost(486.33,
+2e8)`): 4.33 × 10⁸ Lagrangian halos, 3.62 × 10⁸ perturbed, **12.1 GB** on disk
+and **22.3 GB** resident while perturbing — down from 26.2 / 48.2 GB.
+
+**The guard now aborts.** `run_simulation.py` printed this exact diagnosis and
+then ran anyway, losing ~38 minutes of cluster time to a segfault (and had
+done so once before — see `tests/test_provenance.py`). The
+`int32_headroom > 1.0` branch now raises `SystemExit` with the measured
+headroom, the two concrete fixes and their thresholds, and an explicit note
+that narrowing the redshift range will not help.
+
+**`estimate_catalogue_cost()` is now sampler-aware.** It took only `box_len`
+and hardcoded a `HALOS_PER_MPC3` measured at `SAMPLER_MIN_MASS = 1e8`, so
+raising the floor would have left the pre-flight over-estimating by ~2× and
+the guard firing spuriously on a run that was actually safe. It takes an
+optional `sampler_min_mass` (defaulting to the reference, so the old
+one-argument behaviour is unchanged) and scales by
+`provenance.sampler_retained_fraction()`, a log-log interpolation of the
+Sheth-Tormen counts tabulated in `NUMBERS_AND_SOURCES.md` §12.
+
 ---
 
 ## 12. Reference table — every number in one place
@@ -1060,7 +1203,7 @@ HDF5 root attrs, so `outputs/lightcone_data.h5` keeps 0.45 until
 | Random seed | 42 | config |
 | $\Omega_m$, $H_0$, $\Omega_b$ | 0.315, 67.36, 0.049 | config |
 | $M_\mathrm{UV}$ window | −22 ≤ $M_\mathrm{UV}$ ≤ −18 | config / CLI |
-| Equivalent SFR window | 0.7956 – 31.674 M☉ yr⁻¹ | derived |
+| Equivalent SFR window | **0.1868 – 7.4364** M☉ yr⁻¹ | derived (§11.12) |
 | $\sigma_z$ (absolute) | 0.45 | config |
 | $\bar n_\mathrm{gal}$ | 7.48 × 10⁻⁵ Mpc⁻³ | config (§11.10) |
 | $\kappa_\mathrm{UV}$ / AB zero point | 1.15 × 10⁻²⁸ / 51.60 | `src/conversions.py` |

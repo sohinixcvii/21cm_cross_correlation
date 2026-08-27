@@ -48,7 +48,7 @@ supplied reference list; it is flagged rather than assigned a guessed citation.
 | `M_UV_limit` / `M_UV_faint` | `-18` | `run_simulation.py` config; `analysis.select_euclid_halos()` | **Source not yet confirmed** — Euclid faint magnitude cut |
 | `OMEGA_B_0` | `0.049` | `run_simulation.py` §4, `stellar_mass_model()` | **Source not yet confirmed** — baryon density parameter |
 | `p` (Sheth-Tormen) | `0.3` | `conversions.sheth_tormen_bias()` | **Source not yet confirmed** — Sheth-Tormen (1999) fitting parameter, not on the supplied list |
-| `SAMPLER_MIN_MASS` | `1e8` M☉ | `run_simulation.py` §3a, read from `inputs.simulation_options` | Internal to pipeline config — halo sampler minimum resolved mass |
+| `SAMPLER_MIN_MASS` | **`2e8`** M☉ | `run_simulation.py` config block → `inputs.simulation_options`; `provenance.estimate_catalogue_cost()` | Internal to pipeline config — halo sampler minimum resolved mass. **Set by a 32-bit index constraint, not by physics:** the `"simple"` template's `1e8` draws 9.370 × 10⁸ halos at `BOX_LEN = 486.33` Mpc, whose flattened `halo_coords` is 1.31 × `INT_MAX` and segfaults. `2e8` gives 0.61 × `INT_MAX` while retaining 99.84 % of the star formation. See §12 and `HPC.md` §11.13 |
 | `SIGMA_SFR_LIM` | `0.19` dex | `run_simulation.py` §4 (comment only; set inside 21cmFAST) | **Source not yet confirmed** — 21cmFAST log-normal SFR scatter |
 | `SIGMA_STAR` | `0.25` dex | `run_simulation.py` §4 (comment only; set inside 21cmFAST) | **Source not yet confirmed** — 21cmFAST log-normal stellar-mass scatter |
 | `T_STAR_DEFAULT` (`t_STAR`) | `0.5` | `analysis.star_formation_timescale()`; `run_simulation.py` §4 | Park et al. (2019), MNRAS 484, 933 — Eq. 3; SFR timescale as a fraction of the Hubble time |
@@ -513,9 +513,10 @@ change the moment `z_min`/`z_max`, `BOX_LEN` or the footprint does. Marked
 | k_Nyq,⊥ / k_Nyq,∥ | 1.6537 / 1.6524 Mpc⁻¹ | π/cell **[C]** |
 | Recorded `L_los` vs true LOS span | 315.354 vs 315.598 Mpc = 0.08 % | `N_z` × transverse cell **[C]** — `HPC.md` §11.1's 56.5× discrepancy is an artifact of the floored slab and does not recur here |
 | Photo-*z* kernel W at k∥ = 0.0199 / 0.1084 Mpc⁻¹ | 7.3 × 10⁻³ / 5.2 × 10⁻⁶⁴ | exp(−k∥²σ_r²/2) at σ_r = 157.48 Mpc **[C]** |
-| Halos, Lagrangian / perturbed | 9.37 × 10⁸ / 7.84 × 10⁸ | `provenance.estimate_catalogue_cost(486.33)` **[E]** |
-| Catalogue on disk / resident while perturbing | 26.2 / 48.2 GB | same **[E]** |
-| `int32_headroom` | **1.31 — over `INT_MAX`** | same **[E]** |
+| Halos, Lagrangian / perturbed **at the adopted `SAMPLER_MIN_MASS = 2e8`** | 4.33 × 10⁸ / 3.62 × 10⁸ | `provenance.estimate_catalogue_cost(486.33, 2e8)` **[E]** |
+| Catalogue on disk / resident while perturbing | 12.1 / 22.3 GB | same **[E]** |
+| `int32_headroom` | **0.61 — inside `INT_MAX`** | same **[E]** |
+| — at the superseded `SAMPLER_MIN_MASS = 1e8` | 9.37 × 10⁸ / 7.84 × 10⁸ halos, 26.2 / 48.2 GB, `int32_headroom` **1.31 — over `INT_MAX`** | `estimate_catalogue_cost(486.33, 1e8)` **[E]** — the configuration that segfaulted |
 | Box length at headroom 1.0 / 0.5 | 444.6 / 352.9 Mpc | inverting `HALOS_PER_MPC3` **[C]** |
 | Halo count retained by `SAMPLER_MIN_MASS` 1.5 / 2 / 3 × 10⁸ M☉ | 63.1 % / 46.2 % / 28.7 % | Sheth-Tormen `hmf.MassFunction(z=7, dlog10m=0.02)` cumulative counts **[C]** |
 | Star formation retained by the same floors | 99.95 % / 99.84 % / 99.44 % | same, weighted by M · f_★ with f_★ ∝ (M/10¹⁰)^0.5 exp(−`M_TURN`/M) **[C]** |
