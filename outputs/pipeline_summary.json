@@ -1,8 +1,8 @@
 {
-  "generated": "2026-08-28 14:30:51",
+  "generated": "2026-08-28 16:02:01",
   "data_file": "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/lightcone_data.h5",
-  "ran_simulation": true,
-  "recomputed_power_spectra": true,
+  "ran_simulation": false,
+  "recomputed_power_spectra": false,
   "simulation": {
     "HII_DIM": 256,
     "BOX_LEN_Mpc": 486.32904710223784,
@@ -26,7 +26,7 @@
     "k_parallel_max_Mpc-1": 1.5642616668723506,
     "empty_bins": 166,
     "total_bins": 400,
-    "large_scale_cross_mean": -74626.79070357331,
+    "large_scale_cross_mean": -46997.521743585174,
     "large_scale_anticorrelated": true
   },
   "uncertainty_budget": {
@@ -46,34 +46,23 @@
     "integration_time_s": 3600000.0,
     "bandwidth_Hz": 7358953.802258909,
     "mean_galaxy_density": 7.48e-05,
-    "noise_model": "physical",
-    "mode_weighted": true,
-    "P_noise_21cm": 3862.8787883214145,
-    "P_noise_21cm_max": 67128.84793528749,
+    "noise_model": "scaling",
+    "mode_weighted": false,
+    "P_noise_21cm": 4.034347847647047,
+    "P_noise_21cm_max": 4.034347847647047,
     "P_noise_galaxy": 13368.98395721925,
-    "cosmic_variance_fraction": 1.081891067747049e-89,
-    "total_snr_sigma": 4.457966756278885e-44,
+    "cosmic_variance_fraction": 3.424712946966302e-89,
+    "total_snr_sigma": 2.312225297620307e-44,
     "detection_above_5sigma": false
   },
   "figures": [
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/lightcone_fields.pdf",
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/lightcone_slice.pdf",
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/halo_catalogue.pdf",
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/sfr_relations.pdf",
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/uv_luminosity_function.pdf",
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/stellar_mass_muv.pdf",
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/main_sequence.pdf",
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/uv_selection_maps.pdf",
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/euclid_selected_catalogue.pdf",
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/selected_galaxy_overdensity.pdf",
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/galaxy_overdensity_on_21cm.pdf",
     "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/power_spectra_2d.pdf",
     "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/galaxy_wedge.pdf",
     "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/wedge_real_space.pdf",
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/cross_snr.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/power_spectra_1d.pdf",
     "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/uncertainty_budget.pdf",
     "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/photoz_suppression.pdf",
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/galaxy_bias.pdf"
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/number_density.pdf"
   ],
   "estimator": "lightcone",
   "subbands": {
@@ -109,11 +98,11 @@
       62
     ],
     "total_snr_per_band": [
-      1.187017057463778e-49,
-      4.457966756278885e-44,
-      1.0515073720347914e-38
+      6.133182025635664e-50,
+      2.312225297620307e-44,
+      5.4320123185245446e-39
     ],
-    "combined_total_snr": 1.0515073720442413e-38,
+    "combined_total_snr": 5.4320123185737565e-39,
     "representative_z_eff": 6.977208128115768
   },
   "source_run": {
@@ -127,9 +116,9 @@
     "horizon_wedge_slope": 3.1436210030092067,
     "fov_wedge_slope": 0.37740990804855107,
     "modes_outside_wedge_fraction": 0.315,
-    "P_noise_21cm": "[[           inf]\n [ 3862.87878832]\n [ 3876.24515091]\n [ 4159.28780426]\n [ 4066.18819823]\n [ 4538.86394383]\n [ 5830.98359658]\n [ 8507.4180076 ]\n [15733.88662963]\n [67128.84793529]\n [           inf]\n [           inf]\n [           inf]\n [           inf]\n [           inf]\n [           inf]\n [           inf]\n [           inf]\n [           inf]\n [           inf]]",
+    "P_noise_21cm": 4.034347847647047,
     "P_noise_galaxy": 13368.98395721925,
-    "total_snr_sigma": 4.457966756278885e-44,
+    "total_snr_sigma": 2.312225297620307e-44,
     "detection_above_5sigma": false
   },
   "euclid_selection": {
