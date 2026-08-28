@@ -302,7 +302,7 @@ SURVEY_Z_MIN = SIM_BOX.z_min   # 6.744 — survey-derived, not used yet
 SURVEY_Z_MAX = SIM_BOX.z_max   # 7.256 — survey-derived, not used yet
 
 z_center = 7.0
-z_width  = 0.2
+z_width  = 1
 
 z_min = z_center - z_width / 2   # 6.9
 z_max = z_center + z_width / 2   # 7.1

@@ -1,0 +1,101 @@
+{
+  "run_id": "20260827_194548",
+  "label": "sim",
+  "status": "running",
+  "stage": "lightcone",
+  "stages_completed": [],
+  "started": "2026-08-27 19:45:48 BST",
+  "started_utc": "2026-08-27T18:45:48Z",
+  "finished": null,
+  "elapsed_seconds": 0.0,
+  "command": "run_simulation.py",
+  "environment": {
+    "host": "andromeda1.jb.man.ac.uk",
+    "user": "sdutta",
+    "platform": "Linux-4.18.0-553.27.1.el8_10.x86_64-x86_64-with-glibc2.28",
+    "cpu_count": 128,
+    "python": "3.11.15",
+    "executable": "/nvme2/scratch/sohini/miniconda3/envs/21cmfast/bin/python",
+    "cwd": "/nvme2/scratch/sohini/21cm_cross_correlation",
+    "slurm_job_id": null,
+    "slurm_cpus_per_task": null,
+    "git": {
+      "commit": "abd210d6141c8cb794ee34b82e7ed8f37dab6737",
+      "branch": "test/methods",
+      "dirty": true
+    },
+    "packages": {
+      "py21cmfast": "4.1.1",
+      "numpy": "2.4.6",
+      "scipy": "1.17.1",
+      "h5py": "3.16.0",
+      "astropy": "7.2.0",
+      "hmf": "3.5.2",
+      "matplotlib": "3.10.9"
+    }
+  },
+  "peak_memory_GB": 0.179,
+  "parameters": {
+    "SURVEY_AREA_DEG2": 10.0,
+    "SURVEY_Z_CENTRAL": 7.0,
+    "SURVEY_DELTA_Z": 0.512,
+    "PHOTOZ_N_SIGMA": 1,
+    "HII_DIM": 256,
+    "BOX_LEN": 486.32904710223784,
+    "DIM": 768,
+    "z_min": 6.5,
+    "z_max": 7.5,
+    "minimum_los_slices": 100,
+    "M_UV_limit": -22,
+    "M_UV_bright": -26,
+    "M_UV_faint": -22,
+    "photoz_uncertainty": 0.256,
+    "mean_galaxy_density": 7.48e-05,
+    "GALAXY_WEIGHTING": "lightcone_sfr",
+    "OMEGA_M_0": 0.315,
+    "HUBBLE_CONSTANT": 67.36,
+    "HERA_DISH_DIAMETER": 14.0,
+    "integration_time": 3600000,
+    "bandwidth": 8000000.0,
+    "wedge_buffer": 0.0677,
+    "n_bins_perp": 20,
+    "n_bins_parallel": 20,
+    "N_THREADS": 128,
+    "MINIMIZE_MEMORY": true,
+    "SMOKE_TEST": false,
+    "ESTIMATOR": "lightcone",
+    "LIGHTCONE_SAMPLING": "comoving",
+    "GALAXY_MEAN_SUBTRACTION": "per_slice",
+    "random_seed": 42,
+    "has_21cmfast": true
+  },
+  "derived": {
+    "cell_size_Mpc": 1.8997228402431166,
+    "hires_cell_size_Mpc": 0.6332409467477055,
+    "M_cell_hires_Msun": 10072609219.130144,
+    "M_cell_lores_Msun": 271960448916.51395,
+    "L_los_Mpc": 350.8261505246046,
+    "N_z": 185,
+    "z_obs": 7.0,
+    "n_nodes": 10,
+    "box_shape": [
+      256,
+      256,
+      185
+    ],
+    "survey_z_min": 6.744,
+    "survey_z_max": 7.256,
+    "survey_los_depth_Mpc": 179.30260305342745
+  },
+  "cost_estimate": {
+    "volume_Mpc3": 115024572.72427651,
+    "n_halos_lagrangian": 936966971.8932086,
+    "n_halos_perturbed": 783565801.9229907,
+    "catalogue_GB": 26.236644940116573,
+    "resident_GB": 48.17780012377479,
+    "int32_headroom": 1.3089277394993946
+  },
+  "outputs": {
+    "lightcone_data": "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/lightcone_data.h5"
+  }
+}
