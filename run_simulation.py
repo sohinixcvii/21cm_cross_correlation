@@ -34,6 +34,7 @@ References
 import argparse
 import gc
 import os
+import shutil
 import sys
 import numpy as np
 import matplotlib
@@ -71,6 +72,7 @@ from src.conversions import (
 )
 from src.provenance import (
     INT32_MAX,
+    estimate_cache_footprint,
     RunManifest,
     estimate_catalogue_cost,
     resolve_n_threads,
@@ -275,6 +277,11 @@ DIM     = SIM_BOX.dim        # 768, high-res grid for initial conditions
 # hmf.MassFunction(z=7, dlog10m=0.02); see NUMBERS_AND_SOURCES.md section 12
 # and provenance.SAMPLER_RETAINED_FRACTION.
 SAMPLER_MIN_MASS = 2e8       # halo sampler floor [M_sun]
+
+# Multiple of the estimated cache size that must be free before the run starts.
+# The estimate is an empirical extrapolation, and the run also writes its own
+# HDF5 output alongside the cache, so it is not run right to the edge.
+DISK_SAFETY_FACTOR = 1.25
 
 # ---------------------------------------------------------------------------
 #  Lightcone redshift range
@@ -573,9 +580,20 @@ node_redshifts = np.linspace((z_max + z_pad), (z_min - z_pad), n_nodes)   # high
 print(f"Box         : {BOX_LEN:.1f} Mpc,  {HII_DIM}³ cells  →  cell size = {cell_size:.2f} Mpc")
 print(f"Footprint   : {SURVEY_AREA_DEG2:g} deg² at z = {SURVEY_Z_CENTRAL:g}  →  "
       f"BOX_LEN = {BOX_LEN:.1f} Mpc  (Euclid Deep Field Fornax)")
+# Whether the configured lightcone actually uses the footprint-derived range
+# is a property of z_min/z_max, not a fixed story about them -- the banner used
+# to assert "[overridden by the smoke-test slab]" unconditionally, which was
+# wrong twice over: it printed on production runs, and the override comes from
+# the config block's own z_min/z_max, not from --smoke-test.
+_survey_range_in_use = (
+    abs(z_min - SURVEY_Z_MIN) < 1e-6 and abs(z_max - SURVEY_Z_MAX) < 1e-6
+)
 print(f"Survey LOS  : Δz = {SURVEY_DELTA_Z:g} (±{PHOTOZ_N_SIGMA}σ_z)  →  "
-      f"z = {SURVEY_Z_MIN:.2f}–{SURVEY_Z_MAX:.2f}, L_LOS = {SIM_BOX.los_depth:.1f} Mpc "
-      f"[overridden by the smoke-test slab below]")
+      f"z = {SURVEY_Z_MIN:.3f}–{SURVEY_Z_MAX:.3f}, "
+      f"L_LOS = {SIM_BOX.los_depth:.1f} Mpc  "
+      + ("[in use]" if _survey_range_in_use else
+         f"[NOT USED — z_min/z_max override it with "
+         f"{z_min:g}–{z_max:g} below]"))
 print(f"Mass res.   : {M_cell_hires:.3e} M⊙/cell (DIM={DIM}, {hires_cell_size:.3f} Mpc)  |  "
       f"{M_cell_lores:.3e} M⊙/cell (HII_DIM={HII_DIM}, {cell_size:.2f} Mpc)")
 print(f"Lightcone   : z = {z_min} → {z_max}   (reference z_obs = {z_obs})")
@@ -626,6 +644,48 @@ if cost["int32_headroom"] > 1.0:
 elif cost["int32_headroom"] > 0.5:
     print(f"  (halo_coords at {cost['int32_headroom']:.2f}x INT_MAX — "
           f"over half the 32-bit index range)")
+
+# ── Free-disk pre-flight ─────────────────────────────────────────────────────
+# The 21cmFAST cache keeps one halo catalogue PER NODE REDSHIFT, and n_nodes is
+# proportional to the lightcone's redshift span.  Widening z therefore scales
+# the cache linearly -- the opposite of the int32 guard above, whose headroom
+# depends only on BOX_LEN and is indifferent to the redshift range.  A z =
+# 6.5-7.5 run filled a scratch filesystem overnight with errno 28 partway
+# through node 7.2833, after hours of compute, so this is checked up front.
+#
+# `run_lightcone` is not passed a cache argument, so py21cmfast defaults to
+# OutputCache(direc=Path('.')) -- the CACHE LANDS IN THE CURRENT WORKING
+# DIRECTORY.  See docs/HPC.md R3.  That is the filesystem measured here.
+_cache_dir = os.path.abspath(os.getcwd())
+_cache = estimate_cache_footprint(BOX_LEN, n_nodes, SAMPLER_MIN_MASS)
+_free_gb = shutil.disk_usage(_cache_dir).free / 1e9
+
+print(f"Cache est.  : {_cache['total_GB']:.0f}–{_cache['total_upper_GB']:.0f} GB "
+      f"({n_nodes} nodes x {_cache['per_node_GB']:.1f} GB + {_cache['ics_GB']:.1f} GB ICs)"
+      f"  |  {_free_gb:.0f} GB free on {_cache_dir}")
+
+if _free_gb < _cache["total_GB"] * DISK_SAFETY_FACTOR:
+    raise SystemExit(
+        f"\n  *** ABORT: not enough free disk for the 21cmFAST cache.\n"
+        f"      Need >= {_cache['total_GB'] * DISK_SAFETY_FACTOR:.0f} GB "
+        f"({_cache['total_GB']:.0f} GB estimated x {DISK_SAFETY_FACTOR:g} safety), "
+        f"and up to {_cache['total_upper_GB']:.0f} GB if\n"
+        f"      PerturbHaloField is cached per node too.  "
+        f"Free: {_free_gb:.0f} GB on\n"
+        f"      {_cache_dir}\n"
+        f"      The cache is {n_nodes} nodes x {_cache['per_node_GB']:.1f} GB "
+        f"(one halo catalogue each) + {_cache['ics_GB']:.1f} GB of ICs.\n"
+        f"      Fixes, in order of cheapness:\n"
+        f"        1. Delete stale cache trees from earlier runs.  Every change\n"
+        f"           to BOX_LEN / SAMPLER_MIN_MASS / seed starts a NEW hashed\n"
+        f"           directory, so failed runs leave full-size orphans behind.\n"
+        f"        2. Narrow z_min/z_max: n_nodes = round(10 x delta_z), so the\n"
+        f"           cache scales linearly with the redshift span.\n"
+        f"        3. Raise SAMPLER_MIN_MASS (3e8 keeps 99.44% of the star\n"
+        f"           formation and cuts the cache to "
+        f"{estimate_cache_footprint(BOX_LEN, n_nodes, 3e8)['total_GB']:.0f} GB).\n"
+        f"        4. Run from a larger filesystem -- the cache follows the cwd. ***\n"
+    )
 
 # ── Run manifest ─────────────────────────────────────────────────────────────
 # Written now, before the expensive stages, and rewritten after every one of

@@ -7,6 +7,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Cache free-disk pre-flight, 2026-08-28 ──────────────────────────── -->
+
+### Fixed
+
+- **A production run filled the scratch filesystem overnight** —
+  `OSError: [Errno 28] No space left on device` writing
+  `.../7.2833/HaloCatalog.h5`, hours into z = 6.5–7.5. **The 21cmFAST cache
+  scales with the redshift range**, because it keeps one halo catalogue per
+  node redshift and `n_nodes = round(10 × Δz)`. Widening 6.9–7.1 → 6.5–7.5
+  took `n_nodes` from 5 to 10 and doubled the cache to **~128 GB** (up to
+  ~229 GB if `PerturbHaloField` is persisted per node too).
+
+  This is the **mirror image** of the int32 halo-index limit fixed the day
+  before, and the two are easy to confuse: the index guard scales with
+  `BOX_LEN³` alone and is *indifferent* to the redshift range, while the disk
+  cost is `n_nodes × BOX_LEN³` and is *linear* in it. Both are now documented
+  side by side in `docs/HPC.md` §11.13–§11.14.
+
+### Added
+
+- **`provenance.estimate_cache_footprint(box_len, n_nodes, sampler_min_mass)`**
+  — predicts the cache size: ICs once plus one Lagrangian catalogue per node.
+  Returns `total_GB` and `total_upper_GB`, the latter assuming
+  `PerturbHaloField` is cached per node as well; the calibration cannot
+  distinguish them, so it reports a range. Validated against the measured
+  3.83 GB/node at 256 Mpc, which is exactly `catalogue_GB(256, 1e8)`.
+
+- **A free-disk pre-flight in `run_simulation.py`**, mirroring the int32 guard.
+  It prints the estimate against `shutil.disk_usage` on the cache filesystem
+  and aborts at `free < total_GB × DISK_SAFETY_FACTOR` (new config constant,
+  1.25). The abort names four fixes in cost order: delete stale cache trees,
+  narrow the redshift span, raise `SAMPLER_MIN_MASS`, or launch from a larger
+  filesystem. The banner gained a `Cache est.` line reporting the range, the
+  node count, the per-node cost and the measured free space.
+
+  It measures the **current working directory**, because `run_lightcone` is
+  not passed a cache argument and py21cmfast defaults to
+  `OutputCache(direc=Path('.'))` — the failing traceback's relative path
+  confirms it. See `docs/HPC.md` R3.
+
+- **Five tests in `tests/test_provenance.py`**: linear scaling with node count,
+  per-node cost equalling one catalogue, reproduction of the run that filled
+  the disk, monotonicity in the sampler floor, and rejection of a non-positive
+  node count.
+
 <!-- ─── Halo-index overflow fix, 2026-08-27 ─────────────────────────────── -->
 
 ### Fixed

@@ -43,10 +43,13 @@ __all__ = [
     "BYTES_PER_HALO",
     "PERTURBED_FRACTION",
     "INT32_MAX",
+    "IC_CACHE_GB_AT_REFERENCE",
+    "IC_CACHE_REFERENCE_BOX_LEN",
     "SAMPLER_MIN_MASS_REFERENCE",
     "SAMPLER_RETAINED_FRACTION",
     "sampler_retained_fraction",
     "RunManifest",
+    "estimate_cache_footprint",
     "estimate_catalogue_cost",
     "environment_info",
     "git_revision",
@@ -87,6 +90,19 @@ SAMPLER_MIN_MASS_REFERENCE = 1e8
 #: (M/1e10)^0.5 exp(-M_TURN/M) — are 99.95 % / 99.84 % / 99.44 %.  Raising the
 #: floor therefore discards objects, not star formation, because M_TURN = 5e8
 #: already suppresses everything below it.
+#: Initial-conditions cache size measured at the reference box [GB], and the
+#: box it was measured in [Mpc].  ICs scale with volume like the catalogue.
+#: HPC.md quotes 7.7 GB at 486.33 Mpc from a slightly different scaling; the
+#: volume scaling used here gives 6.6 GB.  The difference is ~1 % of a
+#: multi-node cache and is not worth reconciling.
+IC_CACHE_GB_AT_REFERENCE = 0.96
+IC_CACHE_REFERENCE_BOX_LEN = 256.0
+
+#: The cache holds one Lagrangian ``HaloCatalog`` per node redshift.  Measured
+#: at 256 Mpc: 3.83 GB per node, which is exactly ``catalogue_GB`` there, so
+#: the per-node cost is the catalogue and the grids are negligible beside it.
+#: If ``PerturbHaloField`` is also persisted per node the true cost is nearer
+#: ``resident_GB`` per node; :func:`estimate_cache_footprint` reports both.
 SAMPLER_RETAINED_FRACTION = {
     1.0e8: 1.000,
     1.5e8: 0.631,
@@ -370,6 +386,66 @@ def estimate_catalogue_cost(
         # perturb_halo_catalog holds its input and its output simultaneously.
         "resident_GB": (1.0 + PERTURBED_FRACTION) * catalogue_bytes / 1e9,
         "int32_headroom": n_lagrangian * 3.0 / INT32_MAX,
+    }
+
+
+def estimate_cache_footprint(
+    box_len: float,
+    n_nodes: int,
+    sampler_min_mass: float = SAMPLER_MIN_MASS_REFERENCE,
+) -> Dict[str, float]:
+    """
+    Predict the on-disk size of the 21cmFAST cache for a lightcone run.
+
+    The cache holds the initial conditions once, plus one halo catalogue per
+    node redshift.  ``n_nodes`` is proportional to the lightcone's redshift
+    span, so **widening the redshift range scales this linearly** — unlike
+    :func:`estimate_catalogue_cost`, whose int32 headroom depends only on
+    ``box_len`` and is indifferent to the redshift range.
+
+    Parameters
+    ----------
+    box_len : float
+        Comoving box side length [Mpc].
+    n_nodes : int
+        Number of node redshifts the lightcone will scroll through.
+    sampler_min_mass : float, optional
+        Halo sampler floor [M_sun].  Defaults to
+        :data:`SAMPLER_MIN_MASS_REFERENCE`.
+
+    Returns
+    -------
+    dict
+        ``ics_GB``; ``per_node_GB``, one Lagrangian catalogue;
+        ``total_GB``, the calibrated estimate; and ``total_upper_GB``, the
+        same with ``PerturbHaloField`` assumed to be persisted per node too.
+        Treat the pair as a range: the calibration cannot distinguish them.
+
+    Raises
+    ------
+    ValueError
+        If ``n_nodes`` is not positive.
+
+    Notes
+    -----
+    An empirical extrapolation from a 256 Mpc run, inheriting every caveat of
+    :func:`estimate_catalogue_cost`.  It excludes the pipeline's own HDF5
+    output, which is written separately.
+    """
+    if n_nodes <= 0:
+        raise ValueError(f"n_nodes must be positive, got {n_nodes!r}")
+
+    cost = estimate_catalogue_cost(box_len, sampler_min_mass)
+    ics = IC_CACHE_GB_AT_REFERENCE * (
+        float(box_len) / IC_CACHE_REFERENCE_BOX_LEN
+    ) ** 3
+
+    return {
+        "ics_GB": ics,
+        "per_node_GB": cost["catalogue_GB"],
+        "n_nodes": float(n_nodes),
+        "total_GB": ics + n_nodes * cost["catalogue_GB"],
+        "total_upper_GB": ics + n_nodes * cost["resident_GB"],
     }
 
 

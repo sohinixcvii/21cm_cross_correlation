@@ -20,6 +20,7 @@ from src.provenance import (
     SAMPLER_RETAINED_FRACTION,
     RunManifest,
     environment_info,
+    estimate_cache_footprint,
     estimate_catalogue_cost,
     git_revision,
     package_versions,
@@ -335,3 +336,57 @@ def test_the_sampler_floor_does_not_change_the_volume() -> None:
         assert estimate_catalogue_cost(486.33, mass)["volume_Mpc3"] == (
             pytest.approx(486.33 ** 3)
         )
+
+
+# ---------------------------------------------------------------------------
+#  Cache footprint — the disk cost that DOES scale with the redshift range
+# ---------------------------------------------------------------------------
+
+
+def test_cache_scales_linearly_with_node_count() -> None:
+    """One halo catalogue per node: twice the nodes, twice the catalogues."""
+    five = estimate_cache_footprint(486.33, 5, 2e8)
+    ten = estimate_cache_footprint(486.33, 10, 2e8)
+    assert ten["total_GB"] - ten["ics_GB"] == pytest.approx(
+        2 * (five["total_GB"] - five["ics_GB"])
+    )
+    assert ten["ics_GB"] == pytest.approx(five["ics_GB"])
+
+
+def test_cache_per_node_is_one_catalogue() -> None:
+    """The measured 3.83 GB/node at 256 Mpc is exactly one catalogue."""
+    assert estimate_cache_footprint(256.0, 1, 1e8)["per_node_GB"] == (
+        pytest.approx(estimate_catalogue_cost(256.0, 1e8)["catalogue_GB"])
+    )
+    assert estimate_cache_footprint(256.0, 1, 1e8)["per_node_GB"] == (
+        pytest.approx(3.83, abs=0.01)
+    )
+
+
+def test_cache_reproduces_the_run_that_filled_the_disk() -> None:
+    """
+    z = 6.5-7.5 at BOX_LEN = 486.33 needs ~128 GB, and errno 28'd overnight.
+
+    Ten node redshifts, each caching a 12.1 GB halo catalogue at the adopted
+    SAMPLER_MIN_MASS = 2e8.
+    """
+    cache = estimate_cache_footprint(486.33, 10, 2e8)
+    assert cache["total_GB"] == pytest.approx(128, abs=2)
+    assert cache["total_upper_GB"] == pytest.approx(229, abs=3)
+    assert cache["total_upper_GB"] > cache["total_GB"]
+
+
+def test_raising_the_sampler_floor_shrinks_the_cache() -> None:
+    """The floor is the cheapest lever on cache size after the redshift span."""
+    assert (
+        estimate_cache_footprint(486.33, 10, 3e8)["total_GB"]
+        < estimate_cache_footprint(486.33, 10, 2e8)["total_GB"]
+        < estimate_cache_footprint(486.33, 10, 1e8)["total_GB"]
+    )
+
+
+def test_cache_rejects_a_non_positive_node_count() -> None:
+    """A lightcone with no nodes is a configuration error."""
+    for bad in (0, -3):
+        with pytest.raises(ValueError, match="n_nodes"):
+            estimate_cache_footprint(486.33, bad)

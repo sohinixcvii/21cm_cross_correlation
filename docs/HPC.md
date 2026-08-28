@@ -1186,6 +1186,62 @@ one-argument behaviour is unchanged) and scales by
 `provenance.sampler_retained_fraction()`, a log-log interpolation of the
 Sheth-Tormen counts tabulated in `NUMBERS_AND_SOURCES.md` §12.
 
+
+### 11.14 The cache fills the disk — it scales with the *redshift range*
+
+**Hit 2026-08-27 (overnight):** `OSError: [Errno 28] No space left on device`
+writing `.../7.2833/HaloCatalog.h5`, hours into a z = 6.5–7.5 run.
+
+**This is the mirror image of §11.13, and the pair is easy to confuse.**
+
+| | Scales with | Redshift range? |
+|---|---|---|
+| §11.13 int32 halo index | `BOX_LEN³` — *one* catalogue | **Irrelevant.** Narrowing z does nothing |
+| §11.14 cache on disk | `n_nodes × BOX_LEN³` | **Linear.** `n_nodes = round(10 × Δz)` |
+
+Both are true. The index guard cares about the largest single catalogue; the
+disk cares how many of them are kept at once. Widening z = 6.9–7.1 → 6.5–7.5
+took `n_nodes` from 5 to **10** and doubled the cache.
+
+**Calibration.** The cache is the ICs once, plus one Lagrangian `HaloCatalog`
+per node redshift. The measured 3.83 GB/node at 256 Mpc is *exactly*
+`catalogue_GB(256, 1e8)`, so the grids are negligible beside the catalogue.
+
+| z range | nodes | cache @ 2e8 | @ 3e8 |
+|---|---|---|---|
+| 6.900–7.100 | 5 | 68 GB | 45 GB |
+| 6.550–7.450 | 9 | 117 GB | 75 GB |
+| **6.500–7.500** | **10** | **128 GB** | 83 GB |
+
+128 GB is the **floor** — one `HaloCatalog` per node. If `PerturbHaloField` is
+persisted per node too it is **~229 GB**. `estimate_cache_footprint()` reports
+both as `total_GB` and `total_upper_GB`; the calibration cannot distinguish
+them, so treat it as a range.
+
+**The cache lands in the current working directory.** `run_lightcone` is not
+passed a cache argument, so py21cmfast defaults to
+`OutputCache(direc=Path('.'))` — see R3. The traceback's relative path
+(`d6e9e070…/42/…`) confirms it. Whichever filesystem you launch from is the
+one that fills.
+
+**Stale caches are the first thing to check.** Every change to `BOX_LEN`,
+`SAMPLER_MIN_MASS`, the seed, or any input parameter starts a **new hashed
+cache directory**. Failed runs leave full-size orphans behind, and this
+project has changed all three recently — `d1f8b93ecb5e…` is recorded in §8 at
+56 GB, and the failing run wrote to `d6e9e070b33d…`. Reclaiming those may be
+the whole fix.
+
+**A free-disk pre-flight now runs before the expensive stages**
+(`run_simulation.py`), mirroring §11.13's index guard. It prints the estimate
+and the measured free space, and aborts at
+`free < total_GB × DISK_SAFETY_FACTOR` (1.25, since the estimate is empirical
+and the pipeline's own ~19 GB HDF5 lands alongside it). The abort names four
+fixes in cost order: delete stale caches, narrow the redshift span, raise
+`SAMPLER_MIN_MASS`, or launch from a larger filesystem.
+
+Free space required at the 1.25 safety factor: **84 GB** (5 nodes, 2e8),
+**145 GB** (9 nodes), **160 GB** (10 nodes) — or 102 GB for 10 nodes at 3e8.
+
 ---
 
 ## 12. Reference table — every number in one place
