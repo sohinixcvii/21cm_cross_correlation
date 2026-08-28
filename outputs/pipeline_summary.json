@@ -1,5 +1,5 @@
 {
-  "generated": "2026-08-28 16:02:01",
+  "generated": "2026-08-28 16:33:18",
   "data_file": "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/lightcone_data.h5",
   "ran_simulation": false,
   "recomputed_power_spectra": false,
@@ -60,9 +60,7 @@
     "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/galaxy_wedge.pdf",
     "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/wedge_real_space.pdf",
     "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/power_spectra_1d.pdf",
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/uncertainty_budget.pdf",
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/photoz_suppression.pdf",
-    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/number_density.pdf"
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/cross_snr.pdf"
   ],
   "estimator": "lightcone",
   "subbands": {
@@ -120,19 +118,5 @@
     "P_noise_galaxy": 13368.98395721925,
     "total_snr_sigma": 2.312225297620307e-44,
     "detection_above_5sigma": false
-  },
-  "euclid_selection": {
-    "M_UV_bright": -26.0,
-    "M_UV_faint": -22.0,
-    "SFR_min_Msun_yr": 7.436417499013011,
-    "SFR_max_Msun_yr": 296.0491129586594,
-    "n_halos_sfr_positive": 359613531,
-    "n_halos_selected": 21121
-  },
-  "effective_galaxy_bias": {
-    "mean_bias": 6.281403488873747,
-    "bias_min": 3.752768683804562,
-    "bias_max": 11.993607193043625,
-    "n_selected": 21121
   }
 }
