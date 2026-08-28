@@ -1,0 +1,149 @@
+{
+  "generated": "2026-08-28 14:30:51",
+  "data_file": "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/lightcone_data.h5",
+  "ran_simulation": true,
+  "recomputed_power_spectra": true,
+  "simulation": {
+    "HII_DIM": 256,
+    "BOX_LEN_Mpc": 486.32904710223784,
+    "N_z": 186,
+    "L_los_Mpc": 353.34844828521966,
+    "cell_size_Mpc": 1.8997228402431166,
+    "z_min": 6.5,
+    "z_max": 7.5,
+    "z_obs": 7.0,
+    "mean_neutral_fraction": 0.15607574582099915,
+    "mean_brightness_temp_mK": 2.8164165019989014,
+    "galaxy_bias_sim": 6.281403488873747,
+    "beta_rsd": 0.15882941827683983,
+    "n_halos_total": 359613531,
+    "halo_sampling_factor": 1.0
+  },
+  "power_spectra": {
+    "k_perp_min_Mpc-1": 0.007494079046965115,
+    "k_perp_max_Mpc-1": 2.116729287299925,
+    "k_parallel_min_Mpc-1": 0.029607890345727167,
+    "k_parallel_max_Mpc-1": 1.5642616668723506,
+    "empty_bins": 166,
+    "total_bins": 400,
+    "large_scale_cross_mean": -74626.79070357331,
+    "large_scale_anticorrelated": true
+  },
+  "uncertainty_budget": {
+    "z_obs": 6.977208128115768,
+    "photoz_uncertainty_sigma_z": 0.256,
+    "radial_smearing_Mpc": 89.97031801049678,
+    "photoz_kernel_first_bin": 0.028782186021528808,
+    "photoz_kernel_max": 0.028782186021528808,
+    "horizon_wedge_slope": 3.1436210030092067,
+    "fov_wedge_slope": 0.37740990804855107,
+    "wedge_buffer_Mpc-1": 0.0677,
+    "modes_outside_wedge": 126,
+    "modes_total": 400,
+    "modes_outside_wedge_fraction": 0.315,
+    "observed_frequency_MHz": 178.05790913161275,
+    "system_temperature_K": 326.9233640458849,
+    "integration_time_s": 3600000.0,
+    "bandwidth_Hz": 7358953.802258909,
+    "mean_galaxy_density": 7.48e-05,
+    "noise_model": "physical",
+    "mode_weighted": true,
+    "P_noise_21cm": 3862.8787883214145,
+    "P_noise_21cm_max": 67128.84793528749,
+    "P_noise_galaxy": 13368.98395721925,
+    "cosmic_variance_fraction": 1.081891067747049e-89,
+    "total_snr_sigma": 4.457966756278885e-44,
+    "detection_above_5sigma": false
+  },
+  "figures": [
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/lightcone_fields.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/lightcone_slice.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/halo_catalogue.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/sfr_relations.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/uv_luminosity_function.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/stellar_mass_muv.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/main_sequence.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/uv_selection_maps.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/euclid_selected_catalogue.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/selected_galaxy_overdensity.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/galaxy_overdensity_on_21cm.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/power_spectra_2d.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/galaxy_wedge.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/wedge_real_space.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/cross_snr.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/uncertainty_budget.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/photoz_suppression.pdf",
+    "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/figures/galaxy_bias.pdf"
+  ],
+  "estimator": "lightcone",
+  "subbands": {
+    "n_bands": 3,
+    "z_effective": [
+      6.652344432217214,
+      6.977208128115768,
+      7.323124032431508
+    ],
+    "z_min": [
+      6.5000000000140785,
+      6.815159144201423,
+      7.150520670993912
+    ],
+    "z_max": [
+      6.8099194915639565,
+      7.144943291468212,
+      7.501913607444057
+    ],
+    "bandwidth_MHz": [
+      7.515420116166919,
+      7.358953802258909,
+      7.202830234664321
+    ],
+    "los_length_Mpc": [
+      117.78281609501937,
+      117.78281609501937,
+      117.78281609501937
+    ],
+    "n_slices": [
+      62,
+      62,
+      62
+    ],
+    "total_snr_per_band": [
+      1.187017057463778e-49,
+      4.457966756278885e-44,
+      1.0515073720347914e-38
+    ],
+    "combined_total_snr": 1.0515073720442413e-38,
+    "representative_z_eff": 6.977208128115768
+  },
+  "source_run": {
+    "run_id": "20260828_141456",
+    "run_manifest": "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/runs/sim_20260828_141456.json",
+    "random_seed": 42,
+    "n_threads": 128
+  },
+  "observation": {
+    "radial_smearing_Mpc": 89.97031801049678,
+    "horizon_wedge_slope": 3.1436210030092067,
+    "fov_wedge_slope": 0.37740990804855107,
+    "modes_outside_wedge_fraction": 0.315,
+    "P_noise_21cm": "[[           inf]\n [ 3862.87878832]\n [ 3876.24515091]\n [ 4159.28780426]\n [ 4066.18819823]\n [ 4538.86394383]\n [ 5830.98359658]\n [ 8507.4180076 ]\n [15733.88662963]\n [67128.84793529]\n [           inf]\n [           inf]\n [           inf]\n [           inf]\n [           inf]\n [           inf]\n [           inf]\n [           inf]\n [           inf]\n [           inf]]",
+    "P_noise_galaxy": 13368.98395721925,
+    "total_snr_sigma": 4.457966756278885e-44,
+    "detection_above_5sigma": false
+  },
+  "euclid_selection": {
+    "M_UV_bright": -26.0,
+    "M_UV_faint": -22.0,
+    "SFR_min_Msun_yr": 7.436417499013011,
+    "SFR_max_Msun_yr": 296.0491129586594,
+    "n_halos_sfr_positive": 359613531,
+    "n_halos_selected": 21121
+  },
+  "effective_galaxy_bias": {
+    "mean_bias": 6.281403488873747,
+    "bias_min": 3.752768683804562,
+    "bias_max": 11.993607193043625,
+    "n_selected": 21121
+  }
+}
