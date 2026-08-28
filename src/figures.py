@@ -34,7 +34,7 @@ matplotlib.use("Agg")   # headless-safe; must precede pyplot import
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import patheffects
-from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
+from matplotlib.colors import LinearSegmentedColormap, SymLogNorm, TwoSlopeNorm
 from matplotlib.figure import Figure
 from scipy.ndimage import gaussian_filter, generic_filter
 
@@ -1733,9 +1733,33 @@ def _style_k_axes(ax: plt.Axes, k_perp: np.ndarray, k_parallel: np.ndarray) -> N
     ax.set_ylim(k_parallel[0], k_parallel[-2])
 
 
-def _signed_log(power: np.ndarray) -> Tuple[np.ndarray, float]:
+def _signed_log_norm(
+    power: np.ndarray,
+) -> Tuple[np.ndarray, SymLogNorm]:
     """
-    Sign-preserving log of a power spectrum, plus a symmetric colour limit.
+    Masked cross-power and a symmetric log norm that preserves its sign.
+
+    Replaces an earlier ``sign(P) * log10|P|`` transform that had three
+    defects, all of them visible in the cross-power panel:
+
+    * **Sign inversion below unity.**  ``log10|P|`` is negative for
+      ``|P| < 1``, so ``sign(P) * log10|P|`` *flipped the sign* of every bin
+      with ``|P| < 1``.  On a diverging colormap positive cross-power in that
+      range rendered blue and negative rendered red — the colours actively
+      misreported the sign wherever the signal was small.
+    * **A blind spot at unity.**  ``|P| = 1`` maps to exactly 0, the centre of
+      a diverging map, so those bins rendered blank white and read as missing
+      data.
+    * **Empty bins conflated with signal.**  ``NaN`` and exactly-zero bins were
+      also mapped to 0.0, i.e. the same blank white, and the subsequent
+      ``fill_nan_nearest`` call was dead code because the ``np.where`` had
+      already removed every ``NaN``.
+
+    :class:`~matplotlib.colors.SymLogNorm` handles all three: it is linear
+    within ``linthresh`` of zero and logarithmic outside it, monotonic in the
+    signed value throughout, so the colour is always an honest function of
+    ``P``.  Empty bins are masked instead of coloured, so "no data" is
+    visually distinct from "small".
 
     Parameters
     ----------
@@ -1744,18 +1768,36 @@ def _signed_log(power: np.ndarray) -> Tuple[np.ndarray, float]:
 
     Returns
     -------
-    signed_log : ndarray
-        ``sign(P) × log10|P|``, with empty bins filled for display.
-    clim : float
-        95th-percentile absolute value, for symmetric colour limits.
+    masked : ndarray
+        ``power`` with non-finite bins masked.
+    norm : SymLogNorm
+        Symmetric-log norm covering the finite data.
+
+    Notes
+    -----
+    ``linthresh`` is the 1st percentile of ``|P|``, floored at ``1e-8 x`` the
+    colour limit.  It has to track the data floor rather than the peak: the
+    cross-power spans roughly seven decades, and a linthresh set as a fixed
+    fraction of the maximum would put most bins inside the linear region,
+    washing them out to the neutral centre — the same visual failure this
+    function exists to remove.
     """
-    amplitude = np.abs(power)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        raw = np.where(amplitude > 0, np.log10(amplitude) * np.sign(power), 0.0)
-    filled = fill_nan_nearest(raw)
-    nonzero = filled[filled != 0]
-    clim = float(np.nanpercentile(np.abs(nonzero), 95)) if nonzero.size else 1.0
-    return filled, clim
+    masked = np.ma.masked_invalid(np.asarray(power, dtype=float))
+    finite = masked.compressed()
+    nonzero = np.abs(finite[finite != 0])
+
+    if nonzero.size == 0:
+        return masked, SymLogNorm(linthresh=1.0, vmin=-1.0, vmax=1.0, base=10)
+
+    clim = float(np.percentile(nonzero, 99))
+    # The cross-power spans ~7 decades, so linthresh must sit near the FLOOR
+    # of the data, not a fixed fraction of the peak -- otherwise most of the
+    # range falls inside the linear region and washes out to the neutral
+    # centre, reproducing the very "missing bins" look this replaced.
+    linthresh = max(float(np.percentile(nonzero, 1)), clim * 1e-8)
+    return masked, SymLogNorm(
+        linthresh=linthresh, vmin=-clim, vmax=clim, base=10
+    )
 
 
 def _mathtext_float(value: float, significant: int = 3) -> str:
@@ -1829,11 +1871,13 @@ def plot_power_spectra(
     _add_wedge_lines(axes[1], k_perp, horizon_slope, fov_slope, "w")
     axes[1].set_title(r"$P_{\rm gal}(k_\perp,\, k_\parallel)$")
 
-    signed_log, clim = _signed_log(spectra.P_cross.T)
-    im2 = axes[2].pcolormesh(k_perp, k_parallel, signed_log, cmap="RdBu_r",
-                             shading="auto", vmin=-clim, vmax=clim)
+    cross, cross_norm = _signed_log_norm(spectra.P_cross.T)
+    cmap_cross = plt.get_cmap("RdBu_r").copy()
+    cmap_cross.set_bad("0.85")          # empty bins: grey, not white
+    im2 = axes[2].pcolormesh(k_perp, k_parallel, cross, cmap=cmap_cross,
+                             shading="auto", norm=cross_norm)
     fig.colorbar(im2, ax=axes[2],
-                 label=r"sign $\times$ $\log_{10} |P_{21 \times \rm gal}|$")
+                 label=r"$P_{21 \times \rm gal}$  [mK Mpc³], symlog")
     _add_wedge_lines(axes[2], k_perp, horizon_slope, fov_slope, "k")
     axes[2].set_title(r"$P_{21 \times \rm gal}$  (signed)")
 
@@ -2320,11 +2364,13 @@ def plot_snr(
     axes[0].legend(loc="upper left", fontsize=8)
     axes[0].set_title(rf"Per-mode SNR  (total = {snr.total_snr:.1f}$\sigma$)")
 
-    signed_log, clim = _signed_log(P_cross_observed.T)
-    im_cross = axes[1].pcolormesh(k_perp, k_parallel, signed_log, cmap="RdBu_r",
-                                  shading="auto", vmin=-clim, vmax=clim)
+    cross, cross_norm = _signed_log_norm(P_cross_observed.T)
+    cmap_cross = plt.get_cmap("RdBu_r").copy()
+    cmap_cross.set_bad("0.85")
+    im_cross = axes[1].pcolormesh(k_perp, k_parallel, cross, cmap=cmap_cross,
+                                  shading="auto", norm=cross_norm)
     fig.colorbar(im_cross, ax=axes[1],
-                 label=r"sign $\times$ $\log_{10}|P_{21 \times \rm gal}^{\rm obs}|$")
+                 label=r"$P_{21 \times \rm gal}^{\rm obs}$  [mK Mpc³], symlog")
     _add_wedge_lines(axes[1], k_perp, horizon_slope, fov_slope, "k")
     axes[1].set_title(r"Observed $P_{21 \times \rm gal}$  (photo-$z$ damped)")
 

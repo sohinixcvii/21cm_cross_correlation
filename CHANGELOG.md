@@ -7,6 +7,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Cross-power colour scale corrected, 2026-08-28 ──────────────────── -->
+
+### Fixed
+
+- **The cross-power panel misreported the sign of every bin with
+  $|P_\times| < 1$, and rendered $|P_\times| \approx 1$ as blank.** Raised as
+  "how come the cross power is missing bits?" — nothing was missing; the
+  colour transform was wrong. `_signed_log` computed
+  $\mathrm{sign}(P)\times\log_{10}|P|$, which has three defects:
+
+  1. **Sign inversion below unity.** $\log_{10}|P| < 0$ for $|P| < 1$, so the
+     product *flips sign*. On the diverging `RdBu_r` map, positive cross-power
+     rendered **blue** and negative rendered **red** everywhere the signal was
+     small. The 1D spectra show $|P_\times|$ falling from $10^5$ to
+     $10^{-2}$ mK Mpc³, crossing unity near $k \approx 0.7$ Mpc⁻¹ — so the
+     colours were inverted across the whole high-$k$ half of the plane.
+  2. **A blind spot at unity.** $|P| = 1 \Rightarrow 0$, the exact centre of
+     the diverging map, so those bins rendered blank white and read as absent
+     data. This is what prompted the question.
+  3. **Empty bins conflated with signal.** `np.where(amplitude > 0, ...)`
+     mapped `NaN` and exact zeros to `0.0` as well — the same blank white. It
+     also meant the following `fill_nan_nearest` call was **dead code**, since
+     no `NaN` survived to be filled, despite the docstring promising "empty
+     bins filled for display".
+
+  Replaced by `_signed_log_norm`, returning a masked array plus a
+  `matplotlib.colors.SymLogNorm`: linear within `linthresh`, logarithmic
+  outside, and monotonic in the signed value throughout, so the colour is
+  always an honest function of $P$. `linthresh` is the 1st percentile of
+  $|P|$ (floored at $10^{-8}\times$ the colour limit) — it has to track the
+  data floor, not the peak, because a fraction-of-maximum threshold would put
+  most of a seven-decade range inside the linear region and wash it out to the
+  neutral centre, reproducing the original failure. Empty bins are now
+  **masked and drawn grey**, so "no data" is visually distinct from "small".
+
+  Applied to both call sites: `plot_power_spectra` (`power_spectra_2d`) and
+  `plot_snr` (`cross_snr`). Colourbar labels change from
+  `sign x log10|P|` to `P [mK Mpc³], symlog`.
+
+  **The stored figures in `outputs/figures/` predate this** and still show the
+  inverted colours — regenerate with
+  `--sim skip --analysis skip --plots power snr`.
+
 <!-- ─── Number density and 1D spectra figures, 2026-08-28 ───────────────── -->
 
 ### Added
