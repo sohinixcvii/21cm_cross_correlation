@@ -566,7 +566,11 @@ if SMOKE_TEST:                       # see the override block above
     minimum_los_slices = _smoke_override("minimum_los_slices", minimum_los_slices)
 N_z = max(int(round(L_los / cell_size)), minimum_los_slices)
 
-# Redshift and distance for each LOS slice (low-z → high-z)
+# Provisional per-slice redshifts (low-z → high-z), used only by the
+# RectilinearLightconer on the uniform-in-redshift path and by the synthetic
+# fallback.  On the real 21cmFAST path this is REPLACED by
+# `lightcone.lightcone_redshifts` once the run returns, because the delivered
+# slice count and spacing are the lightcone's to decide, not ours to predict.
 lc_redshifts = np.linspace(z_min, z_max, N_z)
 
 # ── Node redshifts for 21cmFAST (coeval snapshots driving the physics) ────────
@@ -837,10 +841,39 @@ if HAS_21CMFAST:
     density_field         = lightcone.lightcones["density"]
     neutral_fraction      = lightcone.lightcones["neutral_fraction"]
 
-    # Update LOS geometry from the actual simulation output
+    # Update LOS geometry from the actual simulation output.
+    #
+    # ALL FOUR come from the lightcone, not from the planned values above.
+    # `lc_redshifts` used to be left at the line-570
+    # `np.linspace(z_min, z_max, N_z)`, which was wrong twice over on the
+    # comoving path:
+    #   * Length.  `between_redshifts` builds
+    #     `arange(d_min, d_max + res, res)`, whose inclusive endpoint can
+    #     return one more slice than `round(L_los / cell_size)` predicted --
+    #     185 planned vs 186 delivered for z = 6.5-7.5, which the analysis
+    #     stage rejected outright.
+    #   * Values.  Slices uniform in comoving DISTANCE are not uniform in
+    #     REDSHIFT, because dD/dz = c/H(z) varies across the box.  Even at a
+    #     matching slice count the linspace was off by up to dz = 0.023
+    #     (2.3 % of the span) mid-box.  That array sets each sub-band's
+    #     effective redshift (TODO.md P0.3), so the error was silent and
+    #     systematic wherever the counts happened to agree.
     N_z         = lightcone.n_slices
     L_los       = lightcone.lightcone_dimensions[2]                  # actual LOS comoving size  [Mpc]
     lc_dist_Mpc = lightcone.lightcone_distances.to(u.Mpc).value      # (N_z,) comoving distances
+    lc_redshifts = np.asarray(
+        getattr(lightcone.lightcone_redshifts, "value",
+                lightcone.lightcone_redshifts),
+        dtype=float,
+    )                                                                # (N_z,)
+
+    if lc_redshifts.shape != (N_z,) or lc_dist_Mpc.shape != (N_z,):
+        manifest.finish("failed")
+        raise ValueError(
+            f"lightcone LOS axes disagree: n_slices={N_z}, "
+            f"lc_redshifts={lc_redshifts.shape}, "
+            f"lc_dist_Mpc={lc_dist_Mpc.shape}"
+        )
 
     print(f"  Lightcone shape : {lightcone.shape}")
     print(f"  LOS extent      : {L_los:.1f} Mpc")
