@@ -598,5 +598,6 @@ def test_every_figure_survives_the_smoke_test_geometry(tmp_path):
         fmt="png", quiet=True, m_uv_bright=-22.0, galaxy_weighting="number",
     )
 
-    assert len(written) == 18
+    # 18 before the 1D spectra and number-density figures were added.
+    assert len(written) == 20
     assert all(os.path.exists(p) and os.path.getsize(p) > 0 for p in written)

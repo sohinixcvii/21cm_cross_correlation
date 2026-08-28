@@ -98,12 +98,13 @@ skips plotting entirely):
 | `halos` | `halo_catalogue`, `sfr_relations` |
 | `scaling` | `uv_luminosity_function`, `stellar_mass_muv`, `main_sequence`, `uv_selection_maps` |
 | `euclid` | `euclid_selected_catalogue`, `selected_galaxy_overdensity`, `galaxy_overdensity_on_21cm` |
-| `power` | `power_spectra_2d`, `galaxy_wedge`, `wedge_real_space` |
+| `power` | `power_spectra_2d`, `power_spectra_1d`, `galaxy_wedge`, `wedge_real_space` |
 | `snr` | `cross_snr` |
 | `budget` | `uncertainty_budget`, `photoz_suppression` |
 | `bias` | `galaxy_bias` |
+| `density` | `number_density` |
 
-The `halos`, `scaling`, `euclid` and `bias` groups are skipped with a message
+The `halos`, `scaling`, `euclid`, `bias` and `density` groups are skipped with a message
 when the stored HDF5 carries no halo catalogue or bias estimate.
 
 The `euclid` group is the post-selection view: the galaxies, halo masses and

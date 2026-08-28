@@ -83,6 +83,10 @@ __all__ = [
     "HERA_APERTURE_EFFICIENCY",
     "N_POLARISATIONS",
     "NOISE_EQUIVALENT_BANDWIDTH",
+    "spherically_average_spectra",
+    "SphericalSpectra",
+    "comoving_number_density",
+    "NumberDensity",
     "cosmological_scalar_x2y",
     "hera_beam_solid_angles",
     "hera_baseline_counts",
@@ -2567,3 +2571,237 @@ def galaxy_overdensity_from_catalogue(
         return np.zeros_like(field), selection
 
     return field / mean_weight - 1.0, selection
+
+
+# ===========================================================================
+#  Spherically averaged spectra and comoving number density
+# ===========================================================================
+
+@dataclass
+class SphericalSpectra:
+    """
+    1D spherically averaged power spectra.
+
+    Attributes
+    ----------
+    k : ndarray
+        Bin centres in ``|k| = sqrt(k_perp^2 + k_par^2)`` [Mpc^-1].
+    P_21cm_auto : ndarray
+        21 cm auto-power [mK^2 Mpc^3].
+    P_galaxy_auto : ndarray
+        Galaxy auto-power [Mpc^3].
+    P_cross : ndarray
+        Cross-power [mK Mpc^3]; negative on large scales.
+    mode_counts : ndarray
+        Modes averaged into each spherical bin.
+    n_bins_used : int
+        Cylindrical bins that contributed, after any wedge cut.
+    """
+
+    k: np.ndarray
+    P_21cm_auto: np.ndarray
+    P_galaxy_auto: np.ndarray
+    P_cross: np.ndarray
+    mode_counts: np.ndarray
+    n_bins_used: int
+
+
+def spherically_average_spectra(
+    spectra: "PowerSpectra",
+    n_bins: int = 12,
+    outside_wedge: Optional[np.ndarray] = None,
+) -> SphericalSpectra:
+    """
+    Collapse cylindrical ``(k_perp, k_par)`` spectra onto ``|k|``.
+
+    Each cylindrical bin is assigned to a spherical bin by its
+    ``|k| = sqrt(k_perp^2 + k_par^2)`` and averaged with ``mode_counts`` as
+    the weight, so the result is the mode-weighted mean rather than an
+    unweighted average over unequally populated bins.
+
+    Parameters
+    ----------
+    spectra : PowerSpectra
+        Cylindrical spectra on a shared grid.
+    n_bins : int, optional
+        Number of log-spaced spherical bins.
+    outside_wedge : ndarray, optional
+        Boolean mask of shape ``(n_perp, n_par)``.  Where given, only
+        ``True`` bins contribute — pass ``budget.outside_wedge`` to average
+        the foreground-clean modes only.
+
+    Returns
+    -------
+    SphericalSpectra
+        Bins with no contributing modes carry ``nan`` and a zero count.
+
+    Raises
+    ------
+    ValueError
+        If ``n_bins`` is not positive, or ``outside_wedge`` has the wrong
+        shape.
+
+    Notes
+    -----
+    The 21 cm signal is anisotropic — redshift-space distortions and the
+    foreground wedge both break spherical symmetry — so this is a summary for
+    plotting, not a substitute for the cylindrical spectra the SNR is built
+    from.
+    """
+    if n_bins <= 0:
+        raise ValueError(f"n_bins must be positive, got {n_bins!r}")
+
+    k_perp = np.asarray(spectra.k_perp, dtype=float)
+    k_par = np.asarray(spectra.k_parallel, dtype=float)
+    weights = np.asarray(spectra.mode_counts, dtype=float)
+
+    if outside_wedge is not None:
+        mask = np.asarray(outside_wedge, dtype=bool)
+        if mask.shape != weights.shape:
+            raise ValueError(
+                f"outside_wedge has shape {mask.shape}, expected "
+                f"{weights.shape}"
+            )
+        weights = np.where(mask, weights, 0.0)
+
+    k_magnitude = np.sqrt(
+        k_perp[:, np.newaxis] ** 2 + k_par[np.newaxis, :] ** 2
+    )
+    finite = np.isfinite(k_magnitude) & (k_magnitude > 0) & (weights > 0)
+    if not finite.any():
+        empty = np.full(n_bins, np.nan)
+        return SphericalSpectra(empty, empty, empty, empty,
+                                np.zeros(n_bins), 0)
+
+    edges = np.logspace(
+        np.log10(k_magnitude[finite].min()),
+        np.log10(k_magnitude[finite].max()),
+        n_bins + 1,
+    )
+    index = np.digitize(k_magnitude, edges) - 1
+    index = np.clip(index, 0, n_bins - 1)
+
+    centres = np.sqrt(edges[:-1] * edges[1:])
+    out = {name: np.full(n_bins, np.nan) for name in
+           ("P_21cm_auto", "P_galaxy_auto", "P_cross")}
+    counts = np.zeros(n_bins)
+
+    for b in range(n_bins):
+        sel = finite & (index == b)
+        w = weights[sel]
+        if w.sum() <= 0:
+            continue
+        counts[b] = w.sum()
+        for name in out:
+            out[name][b] = float(
+                np.sum(getattr(spectra, name)[sel] * w) / w.sum()
+            )
+
+    return SphericalSpectra(
+        k=centres,
+        P_21cm_auto=out["P_21cm_auto"],
+        P_galaxy_auto=out["P_galaxy_auto"],
+        P_cross=out["P_cross"],
+        mode_counts=counts,
+        n_bins_used=int(finite.sum()),
+    )
+
+
+@dataclass
+class NumberDensity:
+    """
+    Cumulative comoving number density of galaxies brighter than a cut.
+
+    Attributes
+    ----------
+    M_UV : ndarray
+        Faint-end magnitude cuts [AB mag].
+    n_cumulative : ndarray
+        ``n(< M_UV)`` [Mpc^-3], i.e. brighter than each cut.
+    shot_noise : ndarray
+        ``1/n`` [Mpc^3], the shot-noise power at each cut.
+    volume_Mpc3 : float
+        Comoving volume the counts were taken in.
+    n_at_selection : float
+        ``n`` inside the adopted ``M_UV_bright <= M_UV <= M_UV_faint`` window.
+    adopted_mean_density : float
+        The pipeline's configured ``mean_galaxy_density`` [Mpc^-3], for
+        comparison against the measured value.
+    """
+
+    M_UV: np.ndarray
+    n_cumulative: np.ndarray
+    shot_noise: np.ndarray
+    volume_Mpc3: float
+    n_at_selection: float
+    adopted_mean_density: float
+
+
+def comoving_number_density(
+    M_UV_halos: np.ndarray,
+    volume_Mpc3: float,
+    M_UV_faint: float,
+    M_UV_bright: float,
+    adopted_mean_density: float,
+    sampling_factor: float = 1.0,
+    n_cuts: int = 40,
+) -> NumberDensity:
+    """
+    Cumulative comoving number density as a function of magnitude cut.
+
+    Parameters
+    ----------
+    M_UV_halos : ndarray
+        Absolute UV magnitude of every catalogue galaxy.
+    volume_Mpc3 : float
+        Comoving volume the catalogue spans.
+    M_UV_faint, M_UV_bright : float
+        The adopted selection window; ``M_UV_bright`` is the more negative.
+    adopted_mean_density : float
+        Configured ``mean_galaxy_density`` [Mpc^-3], carried through for
+        comparison.
+    sampling_factor : float, optional
+        Multiplier undoing any catalogue subsampling on load.
+    n_cuts : int, optional
+        Number of magnitude cuts to evaluate.
+
+    Returns
+    -------
+    NumberDensity
+
+    Raises
+    ------
+    ValueError
+        If ``volume_Mpc3`` is not positive, or the window is inverted.
+    """
+    if volume_Mpc3 <= 0:
+        raise ValueError(f"volume_Mpc3 must be positive, got {volume_Mpc3!r}")
+    if M_UV_bright >= M_UV_faint:
+        raise ValueError(
+            f"M_UV_bright ({M_UV_bright}) must be more negative than "
+            f"M_UV_faint ({M_UV_faint})"
+        )
+
+    magnitudes = np.asarray(M_UV_halos, dtype=float)
+    magnitudes = magnitudes[np.isfinite(magnitudes)]
+
+    cuts = np.linspace(-24.0, -16.0, n_cuts)
+    counts = np.array(
+        [np.count_nonzero(magnitudes <= cut) for cut in cuts], dtype=float
+    )
+    n_cumulative = counts * sampling_factor / volume_Mpc3
+
+    with np.errstate(divide="ignore"):
+        shot = np.where(n_cumulative > 0, 1.0 / n_cumulative, np.inf)
+
+    in_window = np.count_nonzero(
+        (magnitudes <= M_UV_faint) & (magnitudes >= M_UV_bright)
+    )
+    return NumberDensity(
+        M_UV=cuts,
+        n_cumulative=n_cumulative,
+        shot_noise=shot,
+        volume_Mpc3=float(volume_Mpc3),
+        n_at_selection=float(in_window * sampling_factor / volume_Mpc3),
+        adopted_mean_density=float(adopted_mean_density),
+    )

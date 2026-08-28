@@ -69,6 +69,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from src import analysis, figures                       # noqa: E402
+from src.conversions import sfr_to_Muv                  # noqa: E402
 from src.dataio import (                                # noqa: E402
     SimulationData,
     load_power_spectra,
@@ -95,6 +96,7 @@ warnings.filterwarnings("ignore")
 #            on the 21 cm field (Part 2/3)
 PLOT_GROUPS = (
     "fields", "halos", "scaling", "euclid", "power", "snr", "budget", "bias",
+    "density",
 )
 
 DEFAULT_DATA = os.path.join("outputs", "lightcone_data.h5")
@@ -703,7 +705,9 @@ def figure_stage(
 
     if "scaling" in groups:
         if has_catalog:
-            emit("uv_luminosity_function", figures.plot_uv_luminosity_function(data))
+            emit("uv_luminosity_function", figures.plot_uv_luminosity_function(
+                data, M_UV_bright=m_uv_bright,
+            ))
             emit("stellar_mass_muv", figures.plot_stellar_mass_muv(data))
             emit("main_sequence", figures.plot_main_sequence(data))
             emit("uv_selection_maps", figures.plot_uv_selection_maps(
@@ -750,6 +754,17 @@ def figure_stage(
         emit("wedge_real_space", figures.plot_wedge_real_space(
             data, horizon_slope=budget.horizon_slope, wedge_buffer=0.0,
         ))
+        # Spherically averaged counterpart, with the noise floors drawn on.
+        # P_noise_21cm is k_perp-resolved under --noise-model physical, so
+        # reduce it to a representative finite scalar for the guide line.
+        _thermal = np.asarray(budget.snr.P_noise_21cm, dtype=float)
+        _finite = _thermal[np.isfinite(_thermal)]
+        emit("power_spectra_1d", figures.plot_power_spectra_1d(
+            spectra, data,
+            shot_noise=budget.snr.P_noise_galaxy,
+            thermal_noise=float(_finite.mean()) if _finite.size else None,
+            outside_wedge=budget.outside_wedge,
+        ))
 
     if "snr" in groups:
         emit("cross_snr", figures.plot_snr(
@@ -761,6 +776,33 @@ def figure_stage(
     if "budget" in groups:
         emit("uncertainty_budget", figures.plot_uncertainty_budget(budget, data))
         emit("photoz_suppression", figures.plot_photoz_suppression(budget, data))
+
+    if "density" in groups:
+        if has_catalog:
+            # Same conversion the UVLF figure uses: drop non-finite and
+            # non-positive SFRs, which have no defined magnitude.
+            _sfr = data.sfr[np.isfinite(data.sfr) & (data.sfr > 0)]
+            muv = sfr_to_Muv(_sfr)
+            density = analysis.comoving_number_density(
+                M_UV_halos=muv,
+                volume_Mpc3=data.BOX_LEN ** 3,
+                M_UV_faint=float(data.get("M_UV_limit", -18.0)),
+                M_UV_bright=m_uv_bright,
+                adopted_mean_density=float(
+                    data.get("mean_galaxy_density", 7.48e-5)
+                ),
+                sampling_factor=data.halo_sampling_factor,
+            )
+            log(f"  n(in window)        : {density.n_at_selection:.4g} Mpc^-3"
+                f"   ->  1/n = "
+                f"{1.0 / density.n_at_selection:.4g} Mpc^3"
+                if density.n_at_selection > 0 else
+                "  n(in window)        : 0 — no galaxies in the window", quiet)
+            log(f"  adopted mean n̄      : "
+                f"{density.adopted_mean_density:.4g} Mpc^-3", quiet)
+            emit("number_density", figures.plot_number_density(density, data))
+        else:
+            log("  (no halo catalogue — skipping number-density figure)", quiet)
 
     if "bias" in groups:
         if bias is not None:
@@ -1268,7 +1310,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     figures.apply_plot_style(dpi=args.dpi)
 
     # Catalogue-dependent work: halo/scaling/bias figures and the bias stage.
-    needs_catalog = bool({"halos", "scaling", "euclid", "bias"} & set(plot_groups))
+    needs_catalog = bool(
+        {"halos", "scaling", "euclid", "bias", "density"} & set(plot_groups)
+    )
     if args.smoke_test:
         # A pre-flight check must exercise the halo catalogue even with
         # --plots none, since that is one of the stages it exists to verify.

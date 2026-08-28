@@ -198,8 +198,8 @@ def test_plot_selection_limits_output(workspace) -> None:
     ) == 0
 
     assert sorted(os.listdir(workspace["figdir"])) == [
-        "cross_snr.png", "galaxy_wedge.png", "power_spectra_2d.png",
-        "wedge_real_space.png",
+        "cross_snr.png", "galaxy_wedge.png", "power_spectra_1d.png",
+        "power_spectra_2d.png", "wedge_real_space.png",
     ]
 
 
@@ -326,7 +326,8 @@ def test_pdf_output_format(workspace) -> None:
                   "--format", "pdf")
     ) == 0
     assert sorted(os.listdir(workspace["figdir"])) == [
-        "galaxy_wedge.pdf", "power_spectra_2d.pdf", "wedge_real_space.pdf",
+        "galaxy_wedge.pdf", "power_spectra_1d.pdf", "power_spectra_2d.pdf",
+        "wedge_real_space.pdf",
     ]
 
 

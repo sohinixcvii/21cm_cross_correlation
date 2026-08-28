@@ -7,6 +7,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Number density and 1D spectra figures, 2026-08-28 ───────────────── -->
+
+### Added
+
+- **`power_spectra_1d` (group `power`)** — spherically averaged $P_{21}(k)$,
+  $P_\mathrm{gal}(k)$ and $|P_\times(k)|$ on one row, with the **galaxy shot
+  noise $1/\bar n$** drawn on the galaxy panel and the **thermal floor
+  $P_{N,21}$** on the 21 cm panel. Where a wedge mask is available a second
+  dashed curve shows the foreground-clean average beside the all-mode one.
+  Backed by new `analysis.spherically_average_spectra()`, which collapses the
+  cylindrical grid onto $|k|$ weighted by `mode_counts` rather than averaging
+  unequally populated bins. Its docstring records the caveat: the 21 cm signal
+  is anisotropic, so this is a reading aid, not a replacement for the
+  cylindrical spectra the SNR is built from.
+
+- **`number_density` (new group `density`)** — cumulative comoving
+  $n(< M_\mathrm{UV})$ from the halo catalogue and the $1/n$ it implies, with
+  the adopted `mean_galaxy_density`, the measured in-window density, and both
+  magnitude cuts marked. Backed by new `analysis.comoving_number_density()`.
+  The pipeline also logs the in-window $n$ and $1/n$, so the configured
+  $\bar n$ can be checked against what the catalogue actually contains — a
+  direct cross-check on the Allen et al. (2026) value adopted earlier.
+
+### Changed
+
+- **`plot_uv_luminosity_function` marks both edges of the selection window.**
+  It drew only the faint cut, hiding the fact that the bright cut also removes
+  galaxies — easy to overlook when the window was $-22 \le M_\mathrm{UV} \le
+  -18$, and actively misleading now that windows as narrow as $-26 \le
+  M_\mathrm{UV} \le -22$ are in use. It now takes `M_UV_bright`, draws both
+  cuts, and shades the window between them.
+
+- **Literature LFs at three redshifts** (Bouwens+21 $z \sim 6$, 7, 8) replace
+  the single $z \sim 7$ pair. **The simulated LF remains a single curve at
+  `z_obs` and cannot be split into redshift bins:** the stored halo catalogue
+  is the *coeval* catalogue at `z_obs` with no per-halo redshift, so slicing it
+  by line-of-sight position would manufacture evolution the data does not
+  contain — every bin would be identical up to shot noise. A genuine
+  redshift-binned LF needs a lightcone halo catalogue, which the pipeline does
+  not currently persist. Recorded in the function's own comment.
+
 <!-- ─── Cache free-disk pre-flight, 2026-08-28 ──────────────────────────── -->
 
 ### Fixed

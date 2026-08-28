@@ -50,6 +50,10 @@ try:  # local package import (repo root on sys.path)
         photoz_damping_kernel,
         select_euclid_halos,
     )
+    from src.analysis import (
+        SphericalSpectra, NumberDensity,
+        spherically_average_spectra, comoving_number_density,
+    )
     from src.conversions import sfr_to_Luv, sfr_to_Muv
     from src.dataio import PowerSpectra, SimulationData
 except ImportError:  # direct import of the module (src/ on sys.path)
@@ -63,6 +67,10 @@ except ImportError:  # direct import of the module (src/ on sys.path)
         galaxy_overdensity_from_catalogue,
         photoz_damping_kernel,
         select_euclid_halos,
+    )
+    from analysis import (
+        SphericalSpectra, NumberDensity,
+        spherically_average_spectra, comoving_number_density,
     )
     from conversions import sfr_to_Luv, sfr_to_Muv
     from dataio import PowerSpectra, SimulationData
@@ -611,6 +619,7 @@ def _schechter_muv(
 def plot_uv_luminosity_function(
     data: SimulationData,
     magnitude_bin_width: float = 0.5,
+    M_UV_bright: Optional[float] = None,
 ) -> Figure:
     """
     Simulated UV luminosity function against z ~ 7 Schechter fits.
@@ -632,9 +641,19 @@ def plot_uv_luminosity_function(
     Figure
         UVLF figure with Bouwens+21 and Finkelstein+15 overlaid.
     """
+    # Literature Schechter fits at three redshifts.  The SIMULATED LF is a
+    # single curve at z_obs and cannot be split into redshift bins: the stored
+    # halo catalogue is the *coeval* catalogue at z_obs, with no per-halo
+    # redshift, so slicing it by line-of-sight position would manufacture
+    # evolution the data does not contain.  These literature curves supply the
+    # redshift comparison instead, and are labelled as such.
     literature = [
+        dict(label=r"Bouwens+21  $z \sim 6$", phi_star=0.29e-3,
+             m_star=-20.94, alpha=-1.93, color="seagreen", ls=":"),
         dict(label=r"Bouwens+21  $z \sim 7$", phi_star=0.19e-3,
              m_star=-21.15, alpha=-2.06, color="royalblue", ls="--"),
+        dict(label=r"Bouwens+21  $z \sim 8$", phi_star=0.088e-3,
+             m_star=-21.03, alpha=-2.23, color="darkorange", ls=(0, (5, 1))),
         dict(label=r"Finkelstein+15  $z \sim 7$", phi_star=1.57e-4,
              m_star=-21.03, alpha=-2.03, color="tomato", ls="-."),
     ]
@@ -657,6 +676,10 @@ def plot_uv_luminosity_function(
     keep = counts > 0
 
     m_uv_limit = data.get("M_UV_limit", -18.0)
+    m_uv_bright = (
+        float(M_UV_bright) if M_UV_bright is not None
+        else float(data.get("M_UV_bright", -22.0))
+    )
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -676,10 +699,17 @@ def plot_uv_luminosity_function(
         label=rf"21cmFAST ($z = {data.z_obs:.1f}$)",
     )
 
+    # Both edges of the selection window, and the window itself.  Marking
+    # only the faint cut hid the fact that the bright cut also removes
+    # galaxies -- which matters a great deal once the window is narrow.
     ax.axvline(m_uv_limit, color="dimgray", ls="--", lw=1.5,
-               label=rf"Euclid limit ($M_{{\rm UV}} = {m_uv_limit:.0f}$)")
+               label=rf"Faint cut ($M_{{\rm UV}} = {m_uv_limit:.1f}$)")
+    ax.axvline(m_uv_bright, color="darkslateblue", ls=":", lw=1.8,
+               label=rf"Bright cut ($M_{{\rm UV}} = {m_uv_bright:.1f}$)")
+    ax.axvspan(m_uv_bright, m_uv_limit, color="mediumseagreen", alpha=0.13,
+               zorder=0, label="Selection window")
     ax.axvspan(m_uv_limit, -11.0, color="gray", alpha=0.08, zorder=0,
-               label="Fainter than Euclid limit")
+               label="Fainter than the faint cut")
 
     ax.set_xlim(-25.5, -11.0)
     ax.set_ylim(1e-8, 2e-1)
@@ -2065,6 +2095,184 @@ def plot_photoz_suppression(
     ax.set_ylabel(r"$W(k_\parallel)$")
     ax.set_title(rf"Photo-$z$ suppression, $z_{{\rm obs}} = {data.z_obs}$")
     ax.legend(loc="upper right", fontsize=8, framealpha=0.9)
+    return fig
+
+
+def plot_power_spectra_1d(
+    spectra: PowerSpectra,
+    data: SimulationData,
+    shot_noise: float,
+    thermal_noise: Optional[float] = None,
+    outside_wedge: Optional[np.ndarray] = None,
+    n_bins: int = 12,
+) -> Figure:
+    """
+    Spherically averaged 21 cm, galaxy and cross power, with the noise floors.
+
+    The cylindrical spectra are the ones the SNR is built from; this collapses
+    them onto ``|k|`` so the three can be read against each other and against
+    the shot-noise and thermal floors on one axis.
+
+    The galaxy shot noise ``1/n`` is drawn as a horizontal line on the galaxy
+    panel — the scale at which the measured galaxy auto-power stops being
+    signal and becomes counting noise.
+
+    Parameters
+    ----------
+    spectra : PowerSpectra
+        Cylindrical spectra.
+    data : SimulationData
+        Loaded simulation, for the title metadata.
+    shot_noise : float
+        Galaxy shot noise ``P_N,gal = 1/n`` [Mpc^3].
+    thermal_noise : float, optional
+        21 cm thermal noise [mK^2 Mpc^3].  A scalar under the flat model; the
+        mean of a ``k_perp``-resolved array under the physical model.
+    outside_wedge : ndarray, optional
+        Wedge mask.  When given, a second dashed curve shows the
+        foreground-clean average alongside the all-mode one.
+    n_bins : int, optional
+        Number of spherical bins.
+
+    Returns
+    -------
+    Figure
+        Three panels: 21 cm auto, galaxy auto, and cross power.
+
+    Notes
+    -----
+    The 21 cm signal is anisotropic, so a spherical average is a summary for
+    reading off amplitudes — not a substitute for the cylindrical spectra.
+    """
+    everything = spherically_average_spectra(spectra, n_bins=n_bins)
+    clean = (
+        None if outside_wedge is None
+        else spherically_average_spectra(
+            spectra, n_bins=n_bins, outside_wedge=outside_wedge
+        )
+    )
+
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5.2))
+    panels = (
+        ("P_21cm_auto", r"$P_{21}(k)$  [mK$^2$ Mpc$^3$]",
+         r"21 cm auto-power", "crimson"),
+        ("P_galaxy_auto", r"$P_{\rm gal}(k)$  [Mpc$^3$]",
+         r"Galaxy auto-power", "royalblue"),
+        ("P_cross", r"$|P_{\times}(k)|$  [mK Mpc$^3$]",
+         "21 cm $\\times$ galaxy  (negative on large scales; "
+         r"$|P_\times|$ shown)", "darkviolet"),
+    )
+
+    for ax, (name, ylabel, title, colour) in zip(axes, panels):
+        for source, style, tag in (
+            (everything, "-", "all modes"),
+            (clean, "--", "outside wedge"),
+        ):
+            if source is None:
+                continue
+            values = np.abs(getattr(source, name))
+            good = np.isfinite(values) & (values > 0)
+            if not good.any():
+                continue
+            ax.plot(source.k[good], values[good], style, color=colour,
+                    lw=2.0 if style == "-" else 1.6,
+                    alpha=1.0 if style == "-" else 0.75,
+                    marker="o" if style == "-" else None, ms=4,
+                    label=tag)
+
+        if name == "P_galaxy_auto" and np.isfinite(shot_noise):
+            ax.axhline(shot_noise, color="darkorange", ls=":", lw=2.0,
+                       label=rf"$1/\bar n = {shot_noise:.3g}$ Mpc$^3$")
+        if name == "P_21cm_auto" and thermal_noise is not None and (
+                np.isfinite(thermal_noise)):
+            ax.axhline(thermal_noise, color="dimgray", ls=":", lw=2.0,
+                       label=rf"$P_{{N,21}} = {thermal_noise:.3g}$")
+
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel(r"$k$  [Mpc$^{-1}$]", fontsize=12)
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_title(title, fontsize=12)
+        ax.grid(alpha=0.25, which="both")
+        ax.legend(fontsize=9, framealpha=0.9)
+
+    fig.suptitle(
+        rf"Spherically averaged power spectra  ($z = {data.z_obs:.1f}$)",
+        fontsize=13,
+    )
+    fig.tight_layout()
+    return fig
+
+
+def plot_number_density(
+    density: "NumberDensity",
+    data: SimulationData,
+) -> Figure:
+    """
+    Cumulative comoving number density and the shot noise it implies.
+
+    Left: ``n(< M_UV)`` against the magnitude cut, with the adopted selection
+    window and the configured ``mean_galaxy_density`` marked.  Right: the
+    same as ``1/n``, the shot-noise power that enters the cross-power
+    variance.
+
+    Parameters
+    ----------
+    density : NumberDensity
+        From :func:`src.analysis.comoving_number_density`.
+    data : SimulationData
+        Loaded simulation, for the title metadata.
+
+    Returns
+    -------
+    Figure
+        Two panels sharing the magnitude axis.
+    """
+    fig, (ax_n, ax_shot) = plt.subplots(1, 2, figsize=(13, 5.2))
+
+    good = density.n_cumulative > 0
+    ax_n.plot(density.M_UV[good], density.n_cumulative[good],
+              color="royalblue", lw=2.2, label=r"$n(< M_{\rm UV})$, catalogue")
+    ax_n.axhline(density.adopted_mean_density, color="crimson", ls="--", lw=1.8,
+                 label=rf"adopted $\bar n = "
+                       rf"{density.adopted_mean_density:.3g}$ Mpc$^{{-3}}$")
+    if density.n_at_selection > 0:
+        ax_n.axhline(density.n_at_selection, color="seagreen", ls="-.", lw=1.8,
+                     label=rf"in window $= {density.n_at_selection:.3g}$ "
+                           rf"Mpc$^{{-3}}$")
+    ax_n.set_ylabel(r"$n(< M_{\rm UV})$  [Mpc$^{-3}$]", fontsize=12)
+    ax_n.set_title("Cumulative comoving number density", fontsize=12)
+
+    ax_shot.plot(density.M_UV[good], density.shot_noise[good],
+                 color="darkorange", lw=2.2, label=r"$1/n(< M_{\rm UV})$")
+    if density.adopted_mean_density > 0:
+        ax_shot.axhline(1.0 / density.adopted_mean_density, color="crimson",
+                        ls="--", lw=1.8,
+                        label=rf"adopted $1/\bar n = "
+                              rf"{1.0 / density.adopted_mean_density:.4g}$ "
+                              rf"Mpc$^3$")
+    ax_shot.set_ylabel(r"$1/n$  [Mpc$^3$]", fontsize=12)
+    ax_shot.set_title(r"Implied shot noise $P_{N,\rm gal}$", fontsize=12)
+
+    m_faint = float(data.get("M_UV_limit", -18.0))
+    m_bright = float(data.get("M_UV_bright", -22.0))
+    for ax in (ax_n, ax_shot):
+        ax.axvspan(m_bright, m_faint, color="mediumseagreen", alpha=0.13,
+                   zorder=0, label="Selection window")
+        ax.axvline(m_faint, color="dimgray", ls="--", lw=1.3)
+        ax.axvline(m_bright, color="darkslateblue", ls=":", lw=1.5)
+        ax.set_yscale("log")
+        ax.set_xlabel(r"$M_{\rm UV}$ cut  [AB mag]", fontsize=12)
+        ax.invert_xaxis()
+        ax.grid(alpha=0.25, which="both")
+        ax.legend(fontsize=9, framealpha=0.9, loc="best")
+
+    fig.suptitle(
+        rf"Number density and shot noise  ($z = {data.z_obs:.1f}$, "
+        rf"$V = {density.volume_Mpc3:.2e}$ Mpc$^3$)",
+        fontsize=13,
+    )
+    fig.tight_layout()
     return fig
 
 
