@@ -1,0 +1,135 @@
+{
+  "run_id": "20260901_155921",
+  "label": "sim",
+  "status": "complete",
+  "stage": null,
+  "stages_completed": [
+    "lightcone",
+    "halo_catalog",
+    "write_hdf5"
+  ],
+  "started": "2026-09-01 15:59:21 BST",
+  "started_utc": "2026-09-01T14:59:21Z",
+  "finished": "2026-09-01 16:13:04 BST",
+  "elapsed_seconds": 822.62,
+  "command": "run_simulation.py",
+  "environment": {
+    "host": "andromeda1.jb.man.ac.uk",
+    "user": "sdutta",
+    "platform": "Linux-4.18.0-553.27.1.el8_10.x86_64-x86_64-with-glibc2.28",
+    "cpu_count": 128,
+    "python": "3.11.15",
+    "executable": "/nvme2/scratch/sohini/miniconda3/envs/21cmfast/bin/python",
+    "cwd": "/nvme2/scratch/sohini/21cm_cross_correlation",
+    "slurm_job_id": null,
+    "slurm_cpus_per_task": null,
+    "git": {
+      "commit": "3955fb9f0c22b9812079e5c59627808b41d8dd49",
+      "branch": "test/methods",
+      "dirty": false
+    },
+    "packages": {
+      "py21cmfast": "4.1.1",
+      "numpy": "2.4.6",
+      "scipy": "1.17.1",
+      "h5py": "3.16.0",
+      "astropy": "7.2.0",
+      "hmf": "3.5.2",
+      "matplotlib": "3.10.9"
+    }
+  },
+  "peak_memory_GB": 44.299,
+  "parameters": {
+    "SURVEY_AREA_DEG2": 10.0,
+    "SURVEY_Z_CENTRAL": 7.0,
+    "SURVEY_DELTA_Z": 0.512,
+    "PHOTOZ_N_SIGMA": 1,
+    "HII_DIM": 256,
+    "BOX_LEN": 486.32904710223784,
+    "DIM": 768,
+    "z_min": 6.5,
+    "z_max": 7.5,
+    "minimum_los_slices": 100,
+    "M_UV_limit": -22,
+    "M_UV_bright": -26,
+    "M_UV_faint": -22,
+    "photoz_uncertainty": 0.256,
+    "mean_galaxy_density": 7.48e-05,
+    "GALAXY_WEIGHTING": "number",
+    "OMEGA_M_0": 0.315,
+    "HUBBLE_CONSTANT": 67.36,
+    "HERA_DISH_DIAMETER": 14.0,
+    "integration_time": 3600000,
+    "bandwidth": 8000000.0,
+    "wedge_buffer": 0.0677,
+    "n_bins_perp": 20,
+    "n_bins_parallel": 20,
+    "N_THREADS": 128,
+    "MINIMIZE_MEMORY": true,
+    "SMOKE_TEST": false,
+    "ESTIMATOR": "lightcone",
+    "LIGHTCONE_SAMPLING": "comoving",
+    "GALAXY_MEAN_SUBTRACTION": "per_slice",
+    "random_seed": 42,
+    "has_21cmfast": true
+  },
+  "derived": {
+    "cell_size_Mpc": 1.8997228402431166,
+    "hires_cell_size_Mpc": 0.6332409467477055,
+    "M_cell_hires_Msun": 10072609219.130144,
+    "M_cell_lores_Msun": 271960448916.51395,
+    "L_los_Mpc": 350.8261505246046,
+    "N_z": 185,
+    "z_obs": 7.0,
+    "n_nodes": 10,
+    "box_shape": [
+      256,
+      256,
+      185
+    ],
+    "survey_z_min": 6.744,
+    "survey_z_max": 7.256,
+    "survey_los_depth_Mpc": 179.30260305342745
+  },
+  "cost_estimate": {
+    "volume_Mpc3": 115024572.72427651,
+    "sampler_min_mass": 200000000.0,
+    "sampler_retained_fraction": 0.462,
+    "n_halos_lagrangian": 432878741.0146624,
+    "n_halos_perturbed": 362007400.4884217,
+    "catalogue_GB": 12.121329962333858,
+    "resident_GB": 22.258143657183957,
+    "int32_headroom": 0.6047246156487204
+  },
+  "outputs": {
+    "lightcone_data": "/nvme2/scratch/sohini/21cm_cross_correlation/outputs/lightcone_data.h5",
+    "lightcone_data_GB": 8.788606374
+  },
+  "results": {
+    "lightcone_shape": [
+      256,
+      256,
+      186
+    ],
+    "L_los_actual_Mpc": 353.34844828521966,
+    "N_z_actual": 186,
+    "mean_neutral_fraction": 0.15607571601867676,
+    "brightness_temp_min_mK": 0.0,
+    "brightness_temp_max_mK": 25.63129997253418,
+    "sampler_min_mass_Msun": 200000000.0,
+    "n_halos": 359613531,
+    "n_halos_sfr_positive": 359613531,
+    "halo_mass_min_Msun": 200000000.0,
+    "halo_mass_max_Msun": 3570167709696.0,
+    "galaxy_bias": 6.281403488873747,
+    "galaxy_bias_method": "halo_catalog",
+    "galaxy_bias_hmf_analytic": 7.341776737973026,
+    "beta_rsd": 0.15882941827683983,
+    "sfr_timescale_yr": 570300715.3085272
+  },
+  "timings_seconds": {
+    "lightcone": 554.93,
+    "halo_catalog": 247.25,
+    "write_hdf5": 8.9
+  }
+}
