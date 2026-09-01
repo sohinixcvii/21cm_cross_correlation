@@ -94,15 +94,23 @@ skips plotting entirely):
 
 | Group | Figures written |
 |-------|-----------------|
-| `fields` | `lightcone_fields`, `lightcone_slice` |
-| `halos` | `halo_catalogue`, `sfr_relations` |
-| `scaling` | `uv_luminosity_function`, `stellar_mass_muv`, `main_sequence`, `uv_selection_maps` |
-| `euclid` | `euclid_selected_catalogue`, `selected_galaxy_overdensity`, `galaxy_overdensity_on_21cm` |
-| `power` | `power_spectra_2d`, `power_spectra_1d`, `galaxy_wedge`, `wedge_real_space` |
-| `snr` | `cross_snr` |
-| `budget` | `uncertainty_budget`, `photoz_suppression` |
-| `bias` | `galaxy_bias` |
-| `density` | `number_density` |
+| `fields` | `fig01_lightcone_fields`, `fig02_lightcone_slice` |
+| `halos` | `fig03_halo_catalogue`, `fig04_sfr_relations` |
+| `scaling` | `fig05_uv_luminosity_function`, `fig06_stellar_mass_muv`, `fig07_main_sequence`, `fig08_uv_selection_maps` |
+| `euclid` | `fig09_euclid_selected_catalogue`, `fig10_selected_galaxy_overdensity`, `fig11_galaxy_overdensity_on_21cm` |
+| `density` | `fig12_number_density` |
+| `bias` | `fig13_galaxy_bias` |
+| `power` | `fig14_power_spectra_2d`, `fig15_power_spectra_1d`, `fig16_galaxy_wedge`, `fig17_wedge_real_space` |
+| `budget` | `fig18_photoz_suppression`, `fig19_uncertainty_budget` |
+| `snr` | `fig20_cross_snr` |
+
+**The `figNN_` prefix is the figure's position in the pipeline**, from the raw
+simulated fields through the halo catalogue and the Euclid selection to the
+power spectra and finally the SNR that depends on all of them. Numbers come
+from `FIGURE_ORDER` in `run_pipeline.py`, **not** from the order figures
+happen to be written, so `fig14_power_spectra_2d` keeps that name whether it
+came from `--plots all` or `--plots power`. They are zero-padded so a plain
+`ls` lists them in pipeline order.
 
 The galaxy shot noise `P_N,gal = 1/n̄` is derived from this run's own
 Euclid-selected catalogue by default; pass `--nbar config` to use the stored

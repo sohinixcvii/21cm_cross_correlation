@@ -7,6 +7,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Figures numbered by pipeline position, 2026-09-01 ───────────────── -->
+
+### Changed
+
+- **Figure filenames now carry a `figNN_` prefix giving their position in the
+  pipeline** — `fig01_lightcone_fields` through `fig20_cross_snr`, ordered by
+  when the data behind each one is produced: raw simulated fields, halo
+  catalogue, scaling relations, Euclid selection and the galaxy field built
+  from it, number density and bias, power spectra, uncertainty budget, and
+  finally the SNR that consumes everything.
+
+  Numbers come from the new `FIGURE_ORDER` registry in `run_pipeline.py`,
+  **not** from the order figures happen to be emitted. That distinction
+  matters: numbering by emission order would make the same figure
+  `fig01_power_spectra_2d` under `--plots power` and `fig14_power_spectra_2d`
+  under `--plots all`, so a filename would depend on unrelated flags.
+  Zero-padded to two digits so a lexical sort matches pipeline order —
+  unpadded, `fig10` sorts between `fig1` and `fig2`.
+
+  `run_pipeline.figure_filename()` performs the mapping and returns an
+  unregistered name unchanged rather than raising, so a new figure still gets
+  written if someone forgets the registry entry; a test scrapes the `emit()`
+  calls out of the source and fails if any name is missing. Tests derive
+  expected filenames from `figure_filename()` rather than hard-coding them,
+  so inserting a figure does not mean hand-editing assertions.
+
+  **Existing figures in `outputs/figures/` keep their old unnumbered names**
+  until the next run writes over them; the two sets will coexist in the
+  directory, so clear it first if that would be confusing.
+
 <!-- ─── Galaxy field switched to the magnitude-selected sample, 2026-09-01 ─ -->
 
 ### Changed

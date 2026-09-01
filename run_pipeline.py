@@ -99,6 +99,74 @@ PLOT_GROUPS = (
     "density",
 )
 
+#: Every figure the pipeline can write, in the order the data behind it is
+#: produced: raw simulated fields, then the halo catalogue, then the Euclid
+#: selection built from it, then the power spectra, then the uncertainty
+#: budget, and finally the SNR that depends on all of it.
+#:
+#: The index a figure gets comes from THIS tuple, not from the order figures
+#: happen to be emitted in, so ``fig14_power_spectra_2d`` keeps that name
+#: whether it was written by ``--plots all`` or ``--plots power``.  Filenames
+#: that shift with unrelated flags are worse than no numbering at all.
+FIGURE_ORDER = (
+    # ── simulated fields ──────────────────────────────────────────────
+    "lightcone_fields",
+    "lightcone_slice",
+    # ── halo catalogue ────────────────────────────────────────────────
+    "halo_catalogue",
+    "sfr_relations",
+    # ── scaling relations derived from the catalogue ──────────────────
+    "uv_luminosity_function",
+    "stellar_mass_muv",
+    "main_sequence",
+    "uv_selection_maps",
+    # ── Euclid selection and the galaxy field built from it ───────────
+    "euclid_selected_catalogue",
+    "selected_galaxy_overdensity",
+    "galaxy_overdensity_on_21cm",
+    "number_density",
+    "galaxy_bias",
+    # ── power spectra ─────────────────────────────────────────────────
+    "power_spectra_2d",
+    "power_spectra_1d",
+    "galaxy_wedge",
+    "wedge_real_space",
+    # ── uncertainty budget, then the SNR that consumes everything ─────
+    "photoz_suppression",
+    "uncertainty_budget",
+    "cross_snr",
+)
+
+#: Width of the numeric prefix.  Zero-padded so a lexical sort (``ls``, any
+#: file browser) matches the pipeline order; unpadded, fig10 would sort
+#: between fig1 and fig2.
+_FIGURE_INDEX_WIDTH = 2
+
+
+def figure_filename(name: str) -> str:
+    """
+    Prefix a figure's stem with its position in the pipeline.
+
+    Parameters
+    ----------
+    name : str
+        Bare figure name, e.g. ``"power_spectra_2d"``.
+
+    Returns
+    -------
+    str
+        ``"fig14_power_spectra_2d"``.  A name absent from
+        :data:`FIGURE_ORDER` is returned unchanged rather than raising, so an
+        unregistered figure still gets written — it just sorts to the end.
+        The test suite asserts the registry is complete, so that path should
+        not be reachable in practice.
+    """
+    try:
+        index = FIGURE_ORDER.index(name) + 1
+    except ValueError:
+        return name
+    return f"fig{index:0{_FIGURE_INDEX_WIDTH}d}_{name}"
+
 DEFAULT_DATA = os.path.join("outputs", "lightcone_data.h5")
 DEFAULT_PRODUCTS = os.path.join("outputs", "analysis_products.h5")
 DEFAULT_FIGDIR = os.path.join("outputs", "figures")
@@ -714,7 +782,7 @@ def figure_stage(
     written: List[str] = []
 
     def emit(name: str, fig) -> None:
-        path = figures.save_figure(fig, output_dir, name, fmt=fmt)
+        path = figures.save_figure(fig, output_dir, figure_filename(name), fmt=fmt)
         written.append(path)
         log(f"  wrote {path}", quiet)
 

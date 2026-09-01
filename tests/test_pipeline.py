@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 import h5py
@@ -39,6 +40,17 @@ def workspace(tmp_path):
         "figdir": str(tmp_path / "figures"),
         "summary": str(tmp_path / "summary.json"),
     }
+
+
+def fig(name: str, fmt: str = "png") -> str:
+    """
+    Expected on-disk filename for a figure.
+
+    Derived from ``run_pipeline.figure_filename`` rather than hard-coded, so
+    these assertions follow the registry instead of pinning a numbering that
+    would have to be edited by hand every time a figure is inserted.
+    """
+    return f"{run_pipeline.figure_filename(name)}.{fmt}"
 
 
 def base_args(workspace, *extra: str) -> list:
@@ -152,20 +164,20 @@ def test_full_run_writes_figures_products_and_summary(workspace) -> None:
     assert os.path.exists(workspace["summary"])
 
     figure_files = sorted(os.listdir(workspace["figdir"]))
-    for expected in (
-        "lightcone_fields.png",
-        "lightcone_slice.png",
-        "halo_catalogue.png",
-        "sfr_relations.png",
-        "uv_luminosity_function.png",
-        "stellar_mass_muv.png",
-        "main_sequence.png",
-        "euclid_selected_catalogue.png",
-        "selected_galaxy_overdensity.png",
-        "galaxy_overdensity_on_21cm.png",
-        "power_spectra_2d.png",
-        "cross_snr.png",
-    ):
+    for expected in (fig(name) for name in (
+        "lightcone_fields",
+        "lightcone_slice",
+        "halo_catalogue",
+        "sfr_relations",
+        "uv_luminosity_function",
+        "stellar_mass_muv",
+        "main_sequence",
+        "euclid_selected_catalogue",
+        "selected_galaxy_overdensity",
+        "galaxy_overdensity_on_21cm",
+        "power_spectra_2d",
+        "cross_snr",
+    )):
         assert expected in figure_files
 
     with open(workspace["summary"]) as f:
@@ -197,10 +209,12 @@ def test_plot_selection_limits_output(workspace) -> None:
         base_args(workspace, "--analysis", "force", "--plots", "power", "snr")
     ) == 0
 
-    assert sorted(os.listdir(workspace["figdir"])) == [
-        "cross_snr.png", "galaxy_wedge.png", "power_spectra_1d.png",
-        "power_spectra_2d.png", "wedge_real_space.png",
-    ]
+    assert sorted(os.listdir(workspace["figdir"])) == sorted(
+        fig(name) for name in (
+            "cross_snr", "galaxy_wedge", "power_spectra_1d",
+            "power_spectra_2d", "wedge_real_space",
+        )
+    )
 
 
 def test_max_halos_is_recorded_in_summary(workspace) -> None:
@@ -304,9 +318,9 @@ def test_budget_figure_is_written(workspace) -> None:
         base_args(workspace, "--analysis", "force", "--plots", "budget")
     ) == 0
 
-    assert sorted(os.listdir(workspace["figdir"])) == [
-        "photoz_suppression.png", "uncertainty_budget.png",
-    ]
+    assert sorted(os.listdir(workspace["figdir"])) == sorted(
+        fig(name) for name in ("photoz_suppression", "uncertainty_budget")
+    )
 
 
 def test_missing_data_file_returns_error_code(tmp_path) -> None:
@@ -325,10 +339,12 @@ def test_pdf_output_format(workspace) -> None:
         base_args(workspace, "--analysis", "force", "--plots", "power",
                   "--format", "pdf")
     ) == 0
-    assert sorted(os.listdir(workspace["figdir"])) == [
-        "galaxy_wedge.pdf", "power_spectra_1d.pdf", "power_spectra_2d.pdf",
-        "wedge_real_space.pdf",
-    ]
+    assert sorted(os.listdir(workspace["figdir"])) == sorted(
+        fig(name, "pdf") for name in (
+            "galaxy_wedge", "power_spectra_1d", "power_spectra_2d",
+            "wedge_real_space",
+        )
+    )
 
 
 def test_euclid_plot_group_is_written(workspace) -> None:
@@ -337,11 +353,13 @@ def test_euclid_plot_group_is_written(workspace) -> None:
         base_args(workspace, "--analysis", "force", "--plots", "euclid")
     ) == 0
 
-    assert sorted(os.listdir(workspace["figdir"])) == [
-        "euclid_selected_catalogue.png",
-        "galaxy_overdensity_on_21cm.png",
-        "selected_galaxy_overdensity.png",
-    ]
+    assert sorted(os.listdir(workspace["figdir"])) == sorted(
+        fig(name) for name in (
+            "euclid_selected_catalogue",
+            "galaxy_overdensity_on_21cm",
+            "selected_galaxy_overdensity",
+        )
+    )
 
 
 def test_euclid_group_honours_galaxy_weighting(workspace) -> None:
@@ -354,7 +372,7 @@ def test_euclid_group_honours_galaxy_weighting(workspace) -> None:
     ) == 0
 
     assert os.path.exists(
-        os.path.join(workspace["figdir"], "selected_galaxy_overdensity.png")
+        os.path.join(workspace["figdir"], fig("selected_galaxy_overdensity"))
     )
 
 
@@ -545,3 +563,53 @@ def test_explicit_estimator_overrides_the_stored_attribute(workspace) -> None:
     summary = json.loads(open(workspace["summary"]).read())
     assert summary["estimator"] == "coeval"
     assert "subbands" not in summary
+
+
+def test_every_emitted_figure_is_registered() -> None:
+    """
+    No figure may escape the numbering.
+
+    ``figure_filename`` returns an unregistered name unchanged, so a new
+    figure added without a ``FIGURE_ORDER`` entry would silently write an
+    unnumbered file and sort away from its neighbours.  Scrape the emit calls
+    out of the source and require every one to be registered.
+    """
+    source = open(
+        os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "run_pipeline.py",
+        )
+    ).read()
+    emitted = set(re.findall(r'emit\("([a-z0-9_]+)"', source))
+
+    assert emitted, "found no emit() calls to check"
+    assert emitted <= set(run_pipeline.FIGURE_ORDER), (
+        f"unregistered figures: {sorted(emitted - set(run_pipeline.FIGURE_ORDER))}"
+    )
+
+
+def test_figure_order_has_no_duplicates() -> None:
+    """A repeated entry would give two figures the same index."""
+    assert len(run_pipeline.FIGURE_ORDER) == len(set(run_pipeline.FIGURE_ORDER))
+
+
+def test_figure_numbering_is_zero_padded_and_sorts_in_pipeline_order() -> None:
+    """Lexical order of the filenames must match pipeline order."""
+    names = [run_pipeline.figure_filename(n) for n in run_pipeline.FIGURE_ORDER]
+    assert names == sorted(names)
+    assert names[0].startswith("fig01_")
+
+
+def test_figure_numbering_is_independent_of_which_groups_run() -> None:
+    """
+    A figure keeps its number whatever ``--plots`` selects.
+
+    Numbering assigned by emission order would make the same figure
+    ``fig01_`` under ``--plots power`` and ``fig14_`` under ``--plots all``.
+    """
+    assert run_pipeline.figure_filename("power_spectra_2d") == (
+        "fig14_power_spectra_2d"
+    )
+    assert run_pipeline.figure_filename("lightcone_fields") == (
+        "fig01_lightcone_fields"
+    )
