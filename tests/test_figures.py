@@ -601,3 +601,22 @@ def test_every_figure_survives_the_smoke_test_geometry(tmp_path):
     # 18 before the 1D spectra and number-density figures were added.
     assert len(written) == 20
     assert all(os.path.exists(p) and os.path.getsize(p) > 0 for p in written)
+
+
+def test_empty_bins_are_masked_not_fabricated() -> None:
+    """
+    Empty bins must not be filled with a neighbour's value.
+
+    All three panels of ``power_spectra_2d`` share one k-grid and one set of
+    mode counts, so their coverage is identical.  The auto-spectra used to be
+    passed through ``fill_nan_nearest``, which drew empty bins as if measured
+    and made the cross-power look uniquely sparse by comparison.
+    """
+    values = np.array([[1.0, np.nan], [100.0, 4.0]])
+    masked = figures._masked_log10(values)
+
+    assert np.ma.is_masked(masked)
+    assert bool(np.ma.getmaskarray(masked)[0, 1])
+    assert masked[1, 0] == pytest.approx(2.0)
+    # the fabricating helper would have replaced the hole with a real number
+    assert not np.isnan(figures.fill_nan_nearest(values)).any()

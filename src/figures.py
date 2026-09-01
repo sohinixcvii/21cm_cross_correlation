@@ -1733,6 +1733,43 @@ def _style_k_axes(ax: plt.Axes, k_perp: np.ndarray, k_parallel: np.ndarray) -> N
     ax.set_ylim(k_parallel[0], k_parallel[-2])
 
 
+def _masked_log10(values: np.ndarray) -> np.ndarray:
+    """
+    ``log10`` of a spectrum with empty bins masked rather than fabricated.
+
+    Bins with no Fourier modes come back from the estimator as ``NaN``.  These
+    panels used to pass them through :func:`fill_nan_nearest`, which fills each
+    empty bin with its nearest populated neighbour — so 166 of the 400 cells in
+    a typical run were drawn as if measured.  That was wrong on its own terms,
+    and it also made the three panels of one figure disagree: the auto-spectra
+    appeared fully populated while the cross-power (which masks) showed large
+    grey regions, inviting the reading that the cross-power alone was missing
+    data.  All three share one grid and one set of mode counts, so their
+    coverage is identical by construction.
+
+    Parameters
+    ----------
+    values : ndarray
+        Spectrum, already transposed for display.
+
+    Returns
+    -------
+    ndarray
+        Masked array of ``log10|values|``; empty and non-positive bins masked.
+    """
+    amplitude = np.abs(np.asarray(values, dtype=float))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        logged = np.log10(amplitude)
+    return np.ma.masked_invalid(logged)
+
+
+def _grey_bad(name: str):
+    """Colormap with masked (empty) bins drawn grey rather than transparent."""
+    cmap = plt.get_cmap(name).copy()
+    cmap.set_bad("0.85")
+    return cmap
+
+
 def _signed_log_norm(
     power: np.ndarray,
 ) -> Tuple[np.ndarray, SymLogNorm]:
@@ -1855,17 +1892,17 @@ def plot_power_spectra(
     fig, axes = plt.subplots(1, 3, figsize=(18, 5.5))
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        p21_display = fill_nan_nearest(np.log10(np.abs(spectra.P_21cm_auto.T)))
-        pgal_display = fill_nan_nearest(np.log10(np.abs(spectra.P_galaxy_auto.T)))
+        p21_display = _masked_log10(spectra.P_21cm_auto.T)
+        pgal_display = _masked_log10(spectra.P_galaxy_auto.T)
 
-    im0 = axes[0].pcolormesh(k_perp, k_parallel, p21_display, cmap="viridis",
+    im0 = axes[0].pcolormesh(k_perp, k_parallel, p21_display, cmap=_grey_bad("viridis"),
                              shading="auto")
     fig.colorbar(im0, ax=axes[0], label=r"$\log_{10} |P_{21}|$  [mK² Mpc³]")
     _add_wedge_lines(axes[0], k_perp, horizon_slope, fov_slope, "w", label=True)
     axes[0].legend(loc="upper left", fontsize=8)
     axes[0].set_title(r"$P_{21}(k_\perp,\, k_\parallel)$")
 
-    im1 = axes[1].pcolormesh(k_perp, k_parallel, pgal_display, cmap="plasma",
+    im1 = axes[1].pcolormesh(k_perp, k_parallel, pgal_display, cmap=_grey_bad("plasma"),
                              shading="auto")
     fig.colorbar(im1, ax=axes[1], label=r"$\log_{10} |P_{\rm gal}|$  [Mpc³]")
     _add_wedge_lines(axes[1], k_perp, horizon_slope, fov_slope, "w")
@@ -1928,7 +1965,7 @@ def plot_galaxy_wedge(
     fig, ax = plt.subplots(figsize=(7.5, 6))
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        pgal_display = fill_nan_nearest(np.log10(np.abs(spectra.P_galaxy_auto.T)))
+        pgal_display = _masked_log10(spectra.P_galaxy_auto.T)
 
     im = ax.pcolormesh(k_perp, k_parallel, pgal_display, cmap="plasma",
                        shading="auto", zorder=1)
@@ -2355,7 +2392,7 @@ def plot_snr(
     fig, axes = plt.subplots(1, 2, figsize=(14, 5.5))
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        snr_display = fill_nan_nearest(np.log10(snr.snr_per_mode.T))
+        snr_display = _masked_log10(snr.snr_per_mode.T)
 
     im_snr = axes[0].pcolormesh(k_perp, k_parallel, snr_display, cmap="magma",
                                 shading="auto", vmin=-3, vmax=0)
@@ -2365,8 +2402,7 @@ def plot_snr(
     axes[0].set_title(rf"Per-mode SNR  (total = {snr.total_snr:.1f}$\sigma$)")
 
     cross, cross_norm = _signed_log_norm(P_cross_observed.T)
-    cmap_cross = plt.get_cmap("RdBu_r").copy()
-    cmap_cross.set_bad("0.85")
+    cmap_cross = _grey_bad("RdBu_r")
     im_cross = axes[1].pcolormesh(k_perp, k_parallel, cross, cmap=cmap_cross,
                                   shading="auto", norm=cross_norm)
     fig.colorbar(im_cross, ax=axes[1],
@@ -2433,7 +2469,7 @@ def plot_uncertainty_budget(
 
     # ── Panel 2: sigma_cross across the plane ─────────────────────────────
     with np.errstate(divide="ignore", invalid="ignore"):
-        sigma_display = fill_nan_nearest(np.log10(budget.snr.sigma_cross.T))
+        sigma_display = _masked_log10(budget.snr.sigma_cross.T)
     im_sigma = axes[1].pcolormesh(k_perp, k_parallel, sigma_display,
                                   cmap="viridis", shading="auto")
     fig.colorbar(im_sigma, ax=axes[1], label=r"$\log_{10}\sigma_\times$")
@@ -2453,7 +2489,7 @@ def plot_uncertainty_budget(
             budget.snr.cosmic_variance_term / denominator,
             np.nan,
         )
-    im_frac = axes[2].pcolormesh(k_perp, k_parallel, fill_nan_nearest(fraction.T),
+    im_frac = axes[2].pcolormesh(k_perp, k_parallel, np.ma.masked_invalid(fraction.T),
                                  cmap="coolwarm", shading="auto", vmin=0, vmax=1)
     fig.colorbar(im_frac, ax=axes[2],
                  label=r"cosmic-variance share of $\sigma_\times^2$")

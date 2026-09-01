@@ -144,7 +144,7 @@ All commands must run inside the `21cmfast` conda environment
 | Dataset / attrs | Description |
 |---|---|
 | `brightness_temp_field`, `density_field`, `neutral_fraction`, `galaxy_overdensity` | `(HII_DIM, HII_DIM, N_z)` lightcone fields (gzip-compressed) |
-| root attr `galaxy_weighting` | How `galaxy_overdensity` was built: `lightcone_sfr` (default), `number` (`N/<N> - 1`), or `luminosity` (`sum L_UV / <sum L_UV> - 1`) from the Euclid-selected catalogue. Set via `GALAXY_WEIGHTING` in `run_simulation.py`; the three modes are interchangeable downstream |
+| root attr `galaxy_weighting` | How `galaxy_overdensity` was built: `number` (default, `N/<N> - 1`), `lightcone_sfr`, or `luminosity` (`sum L_UV / <sum L_UV> - 1`) from the Euclid-selected catalogue. Set via `GALAXY_WEIGHTING` in `run_simulation.py`; the three modes are interchangeable downstream |
 | `lc_redshifts`, `lc_dist_Mpc` | Per-slice redshift and comoving distance |
 | `halo_catalog/{halo_masses, halo_coords, stellar_masses, sfr}` | Per-halo catalogue at `z_obs` (SFR in M☉ yr⁻¹) |
 | root attrs | Grid/box config, redshift range, galaxy bias, β_rsd, Euclid survey params, cosmology, HERA instrument params, wedge/binning settings |

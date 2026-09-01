@@ -1242,6 +1242,101 @@ fixes in cost order: delete stale caches, narrow the redshift span, raise
 Free space required at the 1.25 safety factor: **84 GB** (5 nodes, 2e8),
 **145 GB** (9 nodes), **160 GB** (10 nodes) — or 102 GB for 10 nodes at 3e8.
 
+
+### 11.15 The galaxy field and the shot noise describe different tracers
+
+**Found 2026-09-01, investigating "why is the 2D cross-power almost noise-like?"**
+
+Two separate things were behind it. The estimator is not one of them — checked
+against fields with a known correlation, it returns $r = +1.0000$, $-1.0000$
+and $-0.593$ (against a target $-0.600$) with and without the taper, and the
+sub-band path slices both fields with identical indices.
+
+**(a) A plotting bug made the cross-power look uniquely sparse.** The two
+auto-power panels passed their data through `fill_nan_nearest`, which fills
+each empty bin with its nearest populated neighbour — so 166 of 400 cells were
+drawn *as if measured*. The cross-power panel masks them. All three panels
+share one $k$-grid and one set of mode counts, so their coverage is identical
+by construction; only the rendering differed. Fixed: all panels now mask, and
+masked cells are grey in every panel. Six call sites were fabricating bins
+this way (`power_spectra_2d`, `galaxy_wedge`, `cross_snr`,
+`uncertainty_budget`).
+
+**(b) The real problem — the forecast mixes two different galaxy
+populations.**
+
+- `P_gal` and `P_x` are measured from whatever `galaxy_overdensity` holds. At
+  `GALAXY_WEIGHTING = "lightcone_sfr"` (the default) that is the **SFR-weighted
+  field of every halo** down to `SAMPLER_MIN_MASS`.
+- `P_N,gal` $= 1/\bar n$ uses $\bar n = 7.48\times10^{-5}$ Mpc⁻³ — the
+  **Euclid-selected bright sample** ($-26 \le M_\mathrm{UV} \le -22$, 21 121
+  galaxies).
+
+These are not the same tracer, and the run's own output proves it: the
+measured `P_gal` runs from $2.8\times10^{4}$ down to $\sim 40$ Mpc³, while the
+assumed shot-noise floor sits at $1/\bar n = 1.34\times10^{4}$ Mpc³. **`P_gal`
+is below its own shot noise for $k \gtrsim 0.12$ Mpc⁻¹** — impossible for a
+single population, since the total galaxy power is signal *plus* shot noise.
+The SNR therefore divides the cross-power of one tracer by the noise of
+another, which is part of why the total comes out at $10^{-44}\sigma$.
+
+**Why SFR weighting decoheres.** SFR is a heavy-tailed weight — it scales
+roughly as $M^{1.5}$ with an `M_TURN` cutoff, so a cell's value is set by its
+rarest massive halo rather than by its ~30 halos. The field's *effective*
+number density is far below its halo count, shot noise dominates `P_gal`, and
+because that shot noise is uncorrelated with $\delta T_b$ it dilutes $r$
+without contributing to $P_\times$. Reproduced directly: Poisson-sampling the
+same underlying density and weighting by a heavy tail gives
+$\delta_\mathrm{gal}^{\max} \sim 10^{4}$ and $|r|$ falling from 0.20 at low $k$
+to 0.017 at high $k$ — the observed signature. The run's own
+$\delta_\mathrm{gal}$ range was $[-1, 1715]$, the same regime.
+
+So the mottling at high $k$ is **genuine decorrelation of a shot-noise
+dominated tracer**, not noisy binning and not an estimator fault.
+
+**Resolved 2026-09-01 — `GALAXY_WEIGHTING` now defaults to `"number"`.**
+$\delta_\mathrm{gal}$ is built by counting Euclid-selected galaxies, so
+$P_\mathrm{gal}$ and the shot noise $1/\bar n$ describe the same population.
+$\bar n$ is measured from that same catalogue (`--nbar catalogue`, the
+default). Verified on a synthetic sample at the selected density: $P_\mathrm{
+gal}$ runs 5386–13 580 Mpc³ against $1/\bar n = 5355$ Mpc³ — above the shot
+floor in every bin, as a single tracer must be.
+
+**A geometry bug had to be fixed to make this usable.** The catalogue deposit
+used `los_extent=BOX_LEN` (486.33 Mpc) while the 21 cm lightcone spans
+`L_los` (353.35 Mpc). Same array shape, different physical depth — so cell $j$
+of one field sat at a different comoving distance from cell $j$ of the other,
+a progressive line-of-sight misalignment reaching ~133 Mpc at the far edge.
+That would have destroyed the cross-power while leaving both auto-spectra
+looking healthy. The deposit now uses `los_extent=L_los`; because the coeval
+cell size equals the lightcone slice spacing, this takes the first
+$L_\mathrm{los}$-deep slab of the coeval box at native resolution, exactly
+$N_z$ cells with no interpolation. `run_simulation.py` now also refuses to
+write a file whose two fields have different shapes.
+
+**This does not remove the decoherence, and is not meant to.** 21 121 selected
+galaxies over the box is $\sim 1.8\times10^{-4}$ Mpc⁻³ — a genuinely sparse
+tracer, so $P_\mathrm{gal}$ is shot-noise dominated and $|r|$ stays low at
+high $k$. What changes is that the measured power and the assumed noise now
+describe the same object, which is the precondition for the SNR meaning
+anything. The $-26 \le M_\mathrm{UV} \le -22$ window is the real constraint.
+
+**Remaining approximation.** The catalogue modes are built from the *coeval*
+perturbed catalogue at $z_\mathrm{obs}$, so the galaxy field carries no
+redshift evolution along the line of sight while the 21 cm lightcone does.
+The two now share a geometry exactly, but the galaxy field is a snapshot. A
+fully consistent treatment needs per-node halo catalogues selected and
+interpolated onto the lightcone: 21cmFAST's lightcone halobox cannot supply
+it, because every quantity it carries (`count`, `halo_sfr`, `n_ion`, …) is
+already summed over all halos in a cell and so cannot have a per-halo
+magnitude cut applied.
+
+**Diagnostics added.** `analysis.cross_correlation_coefficient()` returns
+$r(k) = P_\times/\sqrt{P_{21}P_\mathrm{gal}}$, the scale-by-scale measure that
+separates "noisy bins" from "genuinely decorrelated"; the pipeline logs its
+range every run. The observational stage now warns when `P_gal` falls below
+`P_N,gal` in more than half the populated bins, naming this section.
+
 ---
 
 ## 12. Reference table — every number in one place

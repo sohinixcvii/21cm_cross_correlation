@@ -368,10 +368,27 @@ mean_galaxy_density = 7.48e-5   # n_bar  [Mpc^-3]  (see the block above)
 #     insensitive to its value).
 #
 # The two catalogue modes are interchangeable: identical grid, identical
-# normalisation, identical downstream handling.  They are built from the
-# *coeval* catalogue at z_obs, which spans BOX_LEN along the LOS rather than
-# L_los, so they do not carry the lightcone's redshift evolution.
-GALAXY_WEIGHTING = "lightcone_sfr"   # lightcone_sfr | number | luminosity
+# normalisation, identical downstream handling.
+#
+# "number" is the DEFAULT and the right choice for a Euclid cross-correlation
+# forecast: Euclid counts magnitude-limited galaxies, so the field whose power
+# spectrum we measure has to be built from the same population the shot noise
+# 1/n_bar describes.  Under "lightcone_sfr" it was not -- that field weights
+# EVERY halo by its SFR, so P_gal described one tracer while P_N,gal described
+# another, and the measured P_gal fell below its own shot noise for
+# k > ~0.12 Mpc^-1, which no single population can do.  See docs/HPC.md
+# section 11.15.
+#
+# CAVEAT, unchanged by this: the catalogue modes are built from the *coeval*
+# perturbed catalogue at z_obs, so they carry no redshift evolution along the
+# line of sight, while the 21 cm lightcone does.  The deposit now spans L_los
+# so the two fields share a geometry exactly, but the galaxy field is still a
+# z_obs snapshot.  A fully consistent treatment needs per-node halo catalogues
+# selected and interpolated onto the lightcone; 21cmFAST's lightcone halobox
+# cannot supply it, because every quantity it carries (count, halo_sfr,
+# n_ion, ...) is already summed over all halos in a cell and so cannot have a
+# per-halo magnitude cut applied to it.
+GALAXY_WEIGHTING = "number"   # lightcone_sfr | number | luminosity
 
 if GALAXY_WEIGHTING not in ("lightcone_sfr",) + GALAXY_WEIGHTING_MODES:
     raise ValueError(
@@ -1071,7 +1088,17 @@ if HAS_21CMFAST and GALAXY_WEIGHTING in GALAXY_WEIGHTING_MODES:
         box_len=BOX_LEN,
         n_perp=HII_DIM,
         n_los=N_z,
-        los_extent=BOX_LEN,
+        # L_los, NOT BOX_LEN.  The 21 cm lightcone's N_z slices span L_los;
+        # depositing the galaxies over BOX_LEN instead would give the two
+        # fields the same array shape but different physical depths, so cell
+        # j of one would sit at a different comoving distance from cell j of
+        # the other -- a progressive line-of-sight misalignment reaching
+        # ~133 Mpc by the far edge, which would destroy the cross-correlation
+        # while leaving both auto-spectra looking perfectly healthy.
+        # Because the coeval cell size (BOX_LEN/HII_DIM) equals the lightcone
+        # slice spacing, this takes the first L_los-deep slab of the coeval
+        # box at native resolution -- exactly N_z cells, no interpolation.
+        los_extent=L_los,
         weighting=GALAXY_WEIGHTING,
         M_UV_faint=M_UV_faint,
         M_UV_bright=M_UV_bright,
@@ -1081,7 +1108,7 @@ if HAS_21CMFAST and GALAXY_WEIGHTING in GALAXY_WEIGHTING_MODES:
     print(f"  Halos SFR > 0 : {galaxy_selection.n_valid:,}")
     print(f"  Deposited     : {galaxy_selection.n_selected:,} galaxies")
     print(f"  Grid          : {galaxy_overdensity.shape}, "
-          f"LOS extent {BOX_LEN:.1f} Mpc (coeval box, not L_los)")
+          f"LOS extent {L_los:.1f} Mpc (matches the 21 cm lightcone)")
     print(f"  Galaxy δ      : [{galaxy_overdensity.min():.2f}, {galaxy_overdensity.max():.2f}]")
     print(f"  Shot-noise n̄  : {mean_galaxy_density:.2e} Mpc⁻³  (survey parameter)")
 
@@ -1336,6 +1363,20 @@ print(f"β = f/b        = {beta_rsd:.4f}")
 #   LOS       : N_z cells,   spacing = L_los / N_z [Mpc]
 N       = HII_DIM
 dz_cell = L_los / N_z   # LOS cell size  [Mpc]
+
+# ── Geometry self-check ──────────────────────────────────────────────────────
+# The two fields are cross-correlated cell-by-cell, so they must share a shape
+# AND a physical extent.  Matching shapes alone is not enough: a galaxy field
+# deposited over BOX_LEN and a 21 cm lightcone spanning L_los have identical
+# arrays sitting at different comoving depths, which silently destroys the
+# cross-power while leaving both auto-spectra intact.  Fail here rather than
+# ship a file whose two fields disagree about where they are.
+if galaxy_overdensity.shape != brightness_temp_field.shape:
+    raise ValueError(
+        f"galaxy_overdensity {galaxy_overdensity.shape} and "
+        f"brightness_temp_field {brightness_temp_field.shape} differ; the "
+        f"cross-power requires a shared grid"
+    )
 
 kx = np.fft.fftfreq(N,   d=cell_size) * 2 * np.pi
 ky = np.fft.fftfreq(N,   d=cell_size) * 2 * np.pi

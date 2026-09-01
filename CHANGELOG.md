@@ -7,6 +7,105 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+<!-- ─── Galaxy field switched to the magnitude-selected sample, 2026-09-01 ─ -->
+
+### Changed
+
+- **`GALAXY_WEIGHTING` now defaults to `"number"`:** $\delta_\mathrm{gal}$ is
+  built by counting Euclid-selected galaxies rather than weighting every halo
+  by its SFR. `P_gal` and `P_×` therefore describe the same population as the
+  shot noise $1/\bar n$, which they did not before — the measured `P_gal` used
+  to fall below its own shot noise for $k \gtrsim 0.12$ Mpc⁻¹, which no single
+  tracer can do (`docs/HPC.md` §11.15). Verified on a synthetic sample at the
+  selected density: `P_gal` = 5386–13 580 Mpc³ against $1/\bar n$ = 5355 Mpc³,
+  above the shot floor in every bin.
+
+### Fixed
+
+- **The catalogue galaxy field was deposited over the wrong line-of-sight
+  depth.** `galaxy_overdensity_from_catalogue` was called with
+  `los_extent=BOX_LEN` (486.33 Mpc) while the 21 cm lightcone spans `L_los`
+  (353.35 Mpc). The two fields had identical array shapes but different
+  physical depths, so cell $j$ of one sat at a different comoving distance
+  from cell $j$ of the other — a progressive misalignment reaching ~133 Mpc at
+  the far edge, which would have destroyed the cross-power while leaving both
+  auto-spectra intact. Latent until now, because the default weighting did not
+  use this path. Now `los_extent=L_los`; since the coeval cell size equals the
+  lightcone slice spacing this is the first $L_\mathrm{los}$-deep slab of the
+  coeval box at native resolution, exactly $N_z$ cells, no interpolation.
+
+- **`run_simulation.py` refuses to write mismatched fields.** A shape check on
+  `galaxy_overdensity` against `brightness_temp_field` now runs before the
+  HDF5 write, so a geometry disagreement fails loudly instead of producing a
+  file whose two fields disagree about where they are.
+
+<!-- ─── n_bar derived from the selected catalogue, 2026-09-01 ───────────── -->
+
+### Changed
+
+- **The galaxy shot noise is now measured from the run's own selected
+  catalogue** rather than read from the stored `mean_galaxy_density`
+  attribute. New `analysis.selected_number_density()` counts the halos inside
+  the Euclid magnitude window — using the same SFR window as
+  `select_euclid_halos`, so the count and the catalogue cannot drift apart —
+  and divides by the box volume. `P_N,gal = 1/n̄` therefore describes the
+  sample this simulation actually contains, instead of a density quoted for a
+  different survey geometry and cosmology (the Allen et al. 2026 value, which
+  was derived under that paper's own cosmology — `NUMBERS_AND_SOURCES.md` §2).
+
+  New `--nbar {catalogue,config}` flag, default `catalogue`; `config` restores
+  the previous behaviour. Both values and their ratio are logged, so a
+  disagreement between the simulated catalogue and the configured survey
+  density is visible rather than silent. Falls back to the stored attribute,
+  with a message, when no catalogue is loaded. Requesting `--nbar catalogue`
+  now also forces the catalogue to load, which it would not have done under a
+  reduced `--plots` selection.
+
+  **This does not by itself make the forecast self-consistent.** With
+  `GALAXY_WEIGHTING = "lightcone_sfr"` the measured `P_gal` still comes from
+  the SFR-weighted field of *every* halo while `n̄` describes the
+  magnitude-selected subset, so the tracer mismatch in `docs/HPC.md` §11.15
+  remains — the new warning will still fire. What changes is that `n̄` is now
+  traceable to this run rather than imported.
+
+<!-- ─── Cross-power decoherence investigation, 2026-09-01 ───────────────── -->
+
+### Fixed
+
+- **Auto-power panels fabricated their empty bins.** `plot_power_spectra` and
+  three other figures passed spectra through `fill_nan_nearest`, filling each
+  empty $(k_\perp,k_\parallel)$ bin with its nearest populated neighbour — 166
+  of 400 cells drawn as if measured. The cross-power panel masks them, so one
+  figure showed two different coverages for three spectra that share a grid
+  and a set of mode counts, making the cross-power look uniquely sparse. All
+  display paths now use `_masked_log10`, and masked cells render grey
+  everywhere. Six call sites fixed.
+
+### Added
+
+- **`analysis.cross_correlation_coefficient()`** — $r(k) =
+  P_\times/\sqrt{P_{21}P_\mathrm{gal}}$, spherically averaged. This is the
+  quantity that distinguishes a mottled cross-power map caused by *noisy bins*
+  from one caused by *genuine decorrelation*; the two look identical but mean
+  opposite things. Logged on every run.
+
+- **A tracer-consistency warning.** The observational stage now checks whether
+  the measured `P_gal` falls below the assumed shot noise `P_N,gal` $=1/\bar
+  n$. A single tracer cannot do that — total galaxy power is signal plus shot
+  noise — so it fires only when the measured field and the configured $\bar n$
+  describe different populations. Warns rather than fails: which tracer to
+  forecast is the user's decision.
+
+- **Six tests** covering $r = \pm 1$ recovery, the $|r| \le 1$ bound,
+  near-zero $r$ for independent fields, dilution of $|r|$ by a sparse tracer,
+  and masking-not-fabricating of empty bins.
+
+- **`docs/HPC.md` §11.15** — the full investigation: the estimator verified
+  correct against known correlations, the plotting bug, and the tracer
+  mismatch (`P_gal` measured from the SFR-weighted all-halo field vs
+  $\bar n$ describing the Euclid-selected bright sample, with `P_gal` sitting
+  below its own shot noise for $k \gtrsim 0.12$ Mpc⁻¹ as direct evidence).
+
 <!-- ─── Cross-power colour scale corrected, 2026-08-28 ──────────────────── -->
 
 ### Fixed

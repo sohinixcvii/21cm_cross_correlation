@@ -104,6 +104,10 @@ skips plotting entirely):
 | `bias` | `galaxy_bias` |
 | `density` | `number_density` |
 
+The galaxy shot noise `P_N,gal = 1/n̄` is derived from this run's own
+Euclid-selected catalogue by default; pass `--nbar config` to use the stored
+`mean_galaxy_density` attribute instead.
+
 The `halos`, `scaling`, `euclid`, `bias` and `density` groups are skipped with a message
 when the stored HDF5 carries no halo catalogue or bias estimate.
 
@@ -177,7 +181,7 @@ changing any of them needs `--sim force` to take effect:
 | `minimum_los_slices` | `100` | floor on $N_z$, overriding the cell-size-matched value |
 | `M_UV_limit` / `M_UV_bright` | `-18` / `-22` | Euclid magnitude window |
 | `mean_galaxy_density` | `7.48e-5` | $\bar n_\mathrm{gal}$ [Mpc⁻³, **not** $h^3$ Mpc⁻³] — Euclid Collab.: Allen et al. (2026), A&A 711, A25, Table 2; see `NUMBERS_AND_SOURCES.md` §2 for the $N/V$ derivation and the cosmology caveat |
-| `GALAXY_WEIGHTING` | `"lightcone_sfr"` | `lightcone_sfr` \| `number` \| `luminosity` — how $\delta_\mathrm{gal}$ is built |
+| `GALAXY_WEIGHTING` | `"number"` | `number` \| `luminosity` \| `lightcone_sfr` — how $\delta_\mathrm{gal}$ is built. `number` counts Euclid-selected galaxies, so $P_\mathrm{gal}$ and the shot noise $1/\bar n$ describe the same population |
 | `ESTIMATOR` | `"coeval"` | `coeval` \| `lightcone` — which power-spectrum formalism the run is built for (see below) |
 | `LIGHTCONE_SAMPLING` | derived → `"redshift"` | `redshift` \| `comoving`; `comoving` is `TODO.md` P0.1 |
 | `GALAXY_MEAN_SUBTRACTION` | derived → `"global"` | `global` \| `per_slice`; `per_slice` is `TODO.md` P0.2 |

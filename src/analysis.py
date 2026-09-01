@@ -83,9 +83,11 @@ __all__ = [
     "HERA_APERTURE_EFFICIENCY",
     "N_POLARISATIONS",
     "NOISE_EQUIVALENT_BANDWIDTH",
+    "cross_correlation_coefficient",
     "spherically_average_spectra",
     "SphericalSpectra",
     "comoving_number_density",
+    "selected_number_density",
     "NumberDensity",
     "cosmological_scalar_x2y",
     "hera_beam_solid_angles",
@@ -2805,3 +2807,114 @@ def comoving_number_density(
         n_at_selection=float(in_window * sampling_factor / volume_Mpc3),
         adopted_mean_density=float(adopted_mean_density),
     )
+
+
+def cross_correlation_coefficient(
+    spectra: "PowerSpectra",
+    n_bins: int = 12,
+    outside_wedge: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Spherically averaged cross-correlation coefficient ``r(k)``.
+
+    ``r = P_x / sqrt(P_21 P_gal)`` is the scale-by-scale measure of how much
+    of the achievable correlation is actually present, bounded by
+    ``|r| <= 1``.  It is the quantity to look at when a cross-power map
+    "looks like noise": a map can be visually mottled either because the bins
+    are noisy or because the two fields are genuinely decorrelated, and only
+    ``r`` separates those.
+
+    Computed from the spherically averaged spectra rather than per
+    cylindrical bin, so each point rests on many modes.
+
+    Parameters
+    ----------
+    spectra : PowerSpectra
+        Cylindrical spectra on a shared grid.
+    n_bins : int, optional
+        Number of spherical bins.
+    outside_wedge : ndarray, optional
+        Wedge mask forwarded to :func:`spherically_average_spectra`.
+
+    Returns
+    -------
+    k : ndarray
+        Bin centres [Mpc^-1].
+    r : ndarray
+        Correlation coefficient; ``nan`` where either auto-spectrum is
+        non-positive or the bin is empty.
+
+    Notes
+    -----
+    ``|r|`` falling towards zero with increasing ``k`` is the expected
+    signature of a **sparse tracer**: shot noise adds uncorrelated power to
+    ``P_gal`` without adding anything to ``P_x``, so the ratio is diluted.
+    It is not by itself evidence of an estimator fault.
+    """
+    averaged = spherically_average_spectra(
+        spectra, n_bins=n_bins, outside_wedge=outside_wedge
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        denominator = np.sqrt(averaged.P_21cm_auto * averaged.P_galaxy_auto)
+        r = np.where(denominator > 0, averaged.P_cross / denominator, np.nan)
+    return averaged.k, r
+
+
+def selected_number_density(
+    sfr: np.ndarray,
+    volume_Mpc3: float,
+    M_UV_faint: float,
+    M_UV_bright: float,
+    sampling_factor: float = 1.0,
+) -> float:
+    """
+    Comoving number density of the magnitude-selected sample [Mpc^-3].
+
+    Counts the halos the Euclid cut actually keeps and divides by the volume
+    they were drawn from, so the shot noise ``P_N,gal = 1/n`` describes *this*
+    simulation's selected catalogue rather than an externally quoted density.
+
+    Selection uses the same SFR window as :func:`select_euclid_halos`, so the
+    count here and the catalogue used elsewhere cannot drift apart.
+
+    Parameters
+    ----------
+    sfr : ndarray
+        Star-formation rate of every catalogue halo [M_sun/yr].
+    volume_Mpc3 : float
+        Comoving volume the catalogue spans [Mpc^3].
+    M_UV_faint, M_UV_bright : float
+        Selection window; ``M_UV_bright`` is the more negative.
+    sampling_factor : float, optional
+        Multiplier undoing any catalogue subsampling on load.
+
+    Returns
+    -------
+    float
+        ``n`` [Mpc^-3], or ``0.0`` if nothing is selected.
+
+    Raises
+    ------
+    ValueError
+        If ``volume_Mpc3`` is not positive.
+
+    Notes
+    -----
+    The volume is the *coeval* catalogue's, so this is a density at ``z_obs``
+    rather than an ``n(z)``.  It describes the magnitude-selected sample only:
+    if ``galaxy_overdensity`` was built from a different population (e.g.
+    ``GALAXY_WEIGHTING = "lightcone_sfr"``, which weights every halo by its
+    SFR), then ``P_gal`` and ``1/n`` still describe different tracers.  See
+    ``docs/HPC.md`` §11.15.
+    """
+    if volume_Mpc3 <= 0:
+        raise ValueError(f"volume_Mpc3 must be positive, got {volume_Mpc3!r}")
+
+    sfr_min, sfr_max = euclid_sfr_window(
+        M_UV_faint=M_UV_faint, M_UV_bright=M_UV_bright
+    )
+    values = np.asarray(sfr, dtype=float)
+    selected = np.count_nonzero(
+        np.isfinite(values) & (values >= sfr_min) & (values <= sfr_max)
+    )
+    return float(selected * sampling_factor / volume_Mpc3)

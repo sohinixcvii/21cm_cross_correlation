@@ -380,6 +380,7 @@ def observational_stage(
     noise_model: str = "scaling",
     mode_weighted: bool = False,
     z_obs: Optional[float] = None,
+    mean_galaxy_density: Optional[float] = None,
     quiet: bool = False,
 ) -> analysis.UncertaintyBudget:
     """
@@ -446,7 +447,9 @@ def observational_stage(
             integration_time, "integration_time", 1000 * 3600
         ),
         bandwidth=resolve(bandwidth, "bandwidth", 8e6),
-        mean_galaxy_density=data.get("mean_galaxy_density", 7.48e-5),
+        mean_galaxy_density=resolve(
+            mean_galaxy_density, "mean_galaxy_density", 7.48e-5
+        ),
         dish_diameter=data.get("HERA_DISH_DIAMETER", 14.0),
         f_21_hz=data.get("F_21_HZ", 1420.405e6),
         speed_of_light_mps=data.get("SPEED_OF_LIGHT_MPS", 3e8),
@@ -489,6 +492,29 @@ def observational_stage(
         f"{budget.cosmic_variance_fraction:.1%}", quiet)
     log(f"  Total SNR (outside wedge) : {budget.total_snr:.3g} σ", quiet)
 
+    # ── Tracer-consistency check ──────────────────────────────────────────
+    # P_gal is the measured auto-power of whatever field `galaxy_overdensity`
+    # holds; P_N,gal = 1/n_bar is the shot noise of the *configured* survey
+    # sample.  For a single tracer the total galaxy power can never fall below
+    # its own shot noise, so P_gal < P_N,gal over most of the k range means the
+    # two describe DIFFERENT populations and the SNR mixes them.  That happens
+    # whenever GALAXY_WEIGHTING builds the field from all halos (e.g.
+    # "lightcone_sfr") while mean_galaxy_density describes a magnitude-limited
+    # subset.  Warn rather than fail: which tracer to forecast is the user's
+    # call, not something to silently reconcile.
+    _pgal = np.asarray(spectra.P_galaxy_auto, dtype=float)
+    _finite_gal = _pgal[np.isfinite(_pgal) & (_pgal > 0)]
+    if _finite_gal.size:
+        _below = float(np.mean(_finite_gal < budget.snr.P_noise_galaxy))
+        if _below > 0.5:
+            log(f"  ** WARNING: P_gal is below its assumed shot noise "
+                f"1/n̄ = {budget.snr.P_noise_galaxy:.4g} Mpc³ in "
+                f"{_below:.0%} of populated bins.", quiet)
+            log(f"     A single tracer cannot do that.  The measured galaxy "
+                f"field and the configured n̄ describe different", quiet)
+            log(f"     populations, so the cross-power SNR is not "
+                f"self-consistent.  See docs/HPC.md §11.15.", quiet)
+
     return budget
 
 
@@ -500,6 +526,7 @@ def subband_observational_stage(
     integration_time: Optional[float] = None,
     noise_model: str = "scaling",
     mode_weighted: bool = False,
+    mean_galaxy_density: Optional[float] = None,
     quiet: bool = False,
 ):
     """
@@ -554,6 +581,7 @@ def subband_observational_stage(
                 bandwidth=band_bandwidth,
                 noise_model=noise_model,
                 mode_weighted=mode_weighted,
+                mean_galaxy_density=mean_galaxy_density,
                 quiet=quiet,
             )
         )
@@ -765,6 +793,15 @@ def figure_stage(
             thermal_noise=float(_finite.mean()) if _finite.size else None,
             outside_wedge=budget.outside_wedge,
         ))
+
+    # Decoherence diagnostic: r(k) says whether a mottled cross-power map is
+    # noisy binning or genuine decorrelation.  Cheap, so always reported.
+    _k_r, _r = analysis.cross_correlation_coefficient(spectra)
+    _ok = np.isfinite(_r)
+    if _ok.any():
+        log(f"  Cross-corr r(k)     : {_r[_ok][0]:+.3f} at k = {_k_r[_ok][0]:.3f}"
+            f"  ->  {_r[_ok][-1]:+.3f} at k = {_k_r[_ok][-1]:.3f}"
+            f"   (|r| median {np.nanmedian(np.abs(_r)):.3f})", quiet)
 
     if "snr" in groups:
         emit("cross_snr", figures.plot_snr(
@@ -1168,6 +1205,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
              "k_perp through the HERA baseline distribution, ~10^3 larger)",
     )
     parser.add_argument(
+        "--nbar", choices=("catalogue", "config"), default="catalogue",
+        help="source of n_bar for the galaxy shot noise P_N,gal = 1/n_bar: "
+             "'catalogue' (default) counts the Euclid-selected halos in this "
+             "run and divides by the box volume, so the shot noise describes "
+             "the sample actually simulated; 'config' uses the stored "
+             "mean_galaxy_density attribute instead",
+    )
+    parser.add_argument(
         "--mode-weighted", action="store_true",
         help="apply the La Plante Eq. 19 sqrt(N_patch dN) mode weighting when "
              "summing bins (default off; raises the total SNR ~10x)",
@@ -1313,6 +1358,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     needs_catalog = bool(
         {"halos", "scaling", "euclid", "bias", "density"} & set(plot_groups)
     )
+    # Deriving n_bar from the selected catalogue needs the catalogue, even
+    # when no figure does.  Without this, --nbar catalogue would silently
+    # fall back to the stored attribute whenever plotting was reduced.
+    needs_catalog = needs_catalog or args.nbar == "catalogue"
     if args.smoke_test:
         # A pre-flight check must exercise the halo catalogue even with
         # --plots none, since that is one of the stages it exists to verify.
@@ -1372,6 +1421,37 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             quiet=quiet,
         )
 
+        # ── n_bar for the galaxy shot noise ──────────────────────────
+        # Measured from this run's own Euclid-selected catalogue by default,
+        # so P_N,gal = 1/n_bar describes the sample actually simulated rather
+        # than a density quoted for a different survey geometry.  Falls back
+        # to the stored attribute when no catalogue is loaded.
+        nbar_override = None
+        if args.nbar == "catalogue":
+            if data.has_halo_catalog:
+                nbar_override = analysis.selected_number_density(
+                    sfr=data.sfr,
+                    volume_Mpc3=data.BOX_LEN ** 3,
+                    M_UV_faint=float(data.get("M_UV_limit", -18.0)),
+                    M_UV_bright=args.m_uv_bright,
+                    sampling_factor=data.halo_sampling_factor,
+                )
+                stored = data.get("mean_galaxy_density", 7.48e-5)
+                if nbar_override > 0:
+                    log(f"  n̄ (catalogue)       : {nbar_override:.4g} Mpc⁻³"
+                        f"  →  1/n̄ = {1.0 / nbar_override:.4g} Mpc³", quiet)
+                    log(f"  n̄ (stored config)   : {stored:.4g} Mpc⁻³"
+                        f"   ({nbar_override / stored:.2f}× the catalogue value)",
+                        quiet)
+                else:
+                    log("  n̄ (catalogue)       : 0 — no halos in the "
+                        "magnitude window; falling back to the stored value",
+                        quiet)
+                    nbar_override = None
+            else:
+                log("  (no halo catalogue — n̄ falls back to the stored "
+                    "attribute)", quiet)
+
         band_budgets, combined_snr = None, None
         if subbands is not None:
             budget, band_budgets, combined_snr = subband_observational_stage(
@@ -1381,6 +1461,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 integration_time=args.integration_time,
                 noise_model=args.noise_model,
                 mode_weighted=args.mode_weighted,
+                mean_galaxy_density=nbar_override,
                 quiet=quiet,
             )
         else:
@@ -1392,6 +1473,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 bandwidth=args.bandwidth,
                 noise_model=args.noise_model,
                 mode_weighted=args.mode_weighted,
+                mean_galaxy_density=nbar_override,
                 quiet=quiet,
             )
         save_uncertainty_budget(args.products, budget)

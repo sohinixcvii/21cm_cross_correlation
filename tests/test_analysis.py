@@ -664,3 +664,162 @@ class TestEstimatorDefaultsUnchanged:
             np.nan_to_num(per_slice.P_21cm_auto),
             rtol=1e-9, atol=1e-9,
         )
+
+
+# ---------------------------------------------------------------------------
+#  Cross-correlation coefficient — the "is it noise?" diagnostic
+# ---------------------------------------------------------------------------
+
+def _correlated_pair(seed=11, n=32, nz=32, rho=None):
+    """A 21 cm-like field and a galaxy field with a controlled correlation."""
+    rng = np.random.default_rng(seed)
+    shape = (n, n, nz)
+    kx = np.fft.fftfreq(n) * 2 * np.pi
+    kz = np.fft.fftfreq(nz) * 2 * np.pi
+    KX, KY, KZ = np.meshgrid(kx, kx, kz, indexing="ij")
+    K = np.sqrt(KX ** 2 + KY ** 2 + KZ ** 2)
+    K[0, 0, 0] = 1.0
+    def field():
+        f = np.fft.ifftn(np.fft.fftn(rng.normal(size=shape)) / K).real
+        return f / f.std()
+    d = field()
+    if rho is None:
+        return 20.0 * d, 5.0 * d
+    return 20.0 * d, rho * d + np.sqrt(1.0 - rho ** 2) * field()
+
+
+def test_cross_correlation_coefficient_is_unity_for_identical_fields() -> None:
+    """Perfectly correlated fields must give r = +1 at every scale."""
+    t21, gal = _correlated_pair()
+    spectra = analysis.compute_all_power_spectra(
+        t21, gal, 200.0, 200.0, 8, 8, mean_subtraction="per_slice"
+    )
+    _, r = analysis.cross_correlation_coefficient(spectra, n_bins=8)
+    good = np.isfinite(r)
+    assert good.any()
+    assert np.allclose(r[good], 1.0, atol=1e-6)
+
+
+def test_cross_correlation_coefficient_recovers_anticorrelation() -> None:
+    """21 cm anti-correlates with galaxies; the sign must survive."""
+    t21, gal = _correlated_pair()
+    spectra = analysis.compute_all_power_spectra(
+        -t21, gal, 200.0, 200.0, 8, 8, mean_subtraction="per_slice"
+    )
+    _, r = analysis.cross_correlation_coefficient(spectra, n_bins=8)
+    good = np.isfinite(r)
+    assert np.allclose(r[good], -1.0, atol=1e-6)
+
+
+def test_cross_correlation_coefficient_is_bounded() -> None:
+    """|r| <= 1 by construction, for any input."""
+    t21, gal = _correlated_pair(rho=0.4)
+    spectra = analysis.compute_all_power_spectra(
+        t21, gal, 200.0, 200.0, 8, 8, mean_subtraction="per_slice"
+    )
+    _, r = analysis.cross_correlation_coefficient(spectra, n_bins=8)
+    good = np.isfinite(r)
+    assert np.all(np.abs(r[good]) <= 1.0 + 1e-9)
+
+
+def test_uncorrelated_fields_give_r_near_zero() -> None:
+    """
+    The signature the 2D map shows as "noise".
+
+    Independent fields give r consistent with zero, which is what
+    distinguishes genuine decorrelation from noisy binning.
+    """
+    t21, _ = _correlated_pair(seed=1)
+    _, gal = _correlated_pair(seed=99)
+    spectra = analysis.compute_all_power_spectra(
+        t21, gal, 200.0, 200.0, 8, 8, mean_subtraction="per_slice"
+    )
+    _, r = analysis.cross_correlation_coefficient(spectra, n_bins=8)
+    good = np.isfinite(r)
+    assert abs(float(np.mean(r[good]))) < 0.5
+
+
+def test_sparse_tracer_dilutes_the_correlation() -> None:
+    """
+    Shot noise adds to P_gal but not to P_x, so |r| falls as the tracer
+    thins.  This is the mechanism behind a noise-like cross-power map, and
+    it is physical rather than an estimator fault.
+    """
+    rng = np.random.default_rng(5)
+    t21, gal = _correlated_pair(seed=4)
+    density = gal / gal.std()
+
+    def r_at(mean_count):
+        counts = rng.poisson(
+            mean_count * np.clip(1.0 + density, 0.0, None)
+        ).astype(float)
+        delta = counts / counts.mean() - 1.0
+        spectra = analysis.compute_all_power_spectra(
+            t21, delta, 200.0, 200.0, 8, 8, mean_subtraction="per_slice"
+        )
+        _, r = analysis.cross_correlation_coefficient(spectra, n_bins=8)
+        return float(np.nanmean(np.abs(r)))
+
+    assert r_at(50.0) > r_at(0.5)
+
+
+# ---------------------------------------------------------------------------
+#  n_bar measured from the selected catalogue
+# ---------------------------------------------------------------------------
+
+def test_selected_number_density_counts_only_the_window() -> None:
+    """Halos outside the magnitude window must not contribute to n_bar."""
+    sfr_min, sfr_max = analysis.euclid_sfr_window(
+        M_UV_faint=-18.0, M_UV_bright=-22.0
+    )
+    inside = np.full(10, 0.5 * (sfr_min + sfr_max))
+    outside = np.concatenate([
+        np.full(50, sfr_min * 0.1),      # too faint
+        np.full(50, sfr_max * 10.0),     # too bright
+    ])
+    sfr = np.concatenate([inside, outside])
+
+    n = analysis.selected_number_density(
+        sfr, volume_Mpc3=100.0, M_UV_faint=-18.0, M_UV_bright=-22.0
+    )
+    assert n == pytest.approx(10 / 100.0)
+
+
+def test_selected_number_density_applies_the_sampling_factor() -> None:
+    """A subsampled catalogue is scaled back up to the full population."""
+    sfr_min, sfr_max = analysis.euclid_sfr_window(
+        M_UV_faint=-18.0, M_UV_bright=-22.0
+    )
+    sfr = np.full(8, 0.5 * (sfr_min + sfr_max))
+    base_n = analysis.selected_number_density(
+        sfr, 100.0, -18.0, -22.0, sampling_factor=1.0
+    )
+    scaled = analysis.selected_number_density(
+        sfr, 100.0, -18.0, -22.0, sampling_factor=4.0
+    )
+    assert scaled == pytest.approx(4.0 * base_n)
+
+
+def test_selected_number_density_handles_an_empty_selection() -> None:
+    """No halos in the window is 0, not a division error."""
+    assert analysis.selected_number_density(
+        np.array([1e-30, 2e-30]), 100.0, -18.0, -22.0
+    ) == 0.0
+
+
+def test_selected_number_density_rejects_a_non_positive_volume() -> None:
+    """A zero volume is a configuration error, not a silent infinity."""
+    with pytest.raises(ValueError, match="volume_Mpc3"):
+        analysis.selected_number_density(np.array([1.0]), 0.0, -18.0, -22.0)
+
+
+def test_selected_number_density_agrees_with_select_euclid_halos() -> None:
+    """The measured density and the selected catalogue cannot drift apart."""
+    rng = np.random.default_rng(2)
+    sfr = 10.0 ** rng.uniform(-2.0, 2.5, size=4000)
+    masses = np.full_like(sfr, 1e11)
+    selection = analysis.select_euclid_halos(
+        sfr, masses, M_UV_faint=-18.0, M_UV_bright=-22.0
+    )
+    n = analysis.selected_number_density(sfr, 1000.0, -18.0, -22.0)
+    assert n == pytest.approx(selection.M_UV.size / 1000.0)
